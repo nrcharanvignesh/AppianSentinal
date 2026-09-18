@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "appian-sentinel"
+version = "0.1.0"
+description = "Agentic Appian development automation — parse exports, analyze stories, generate/modify objects, validate with SAIL AST, and repackage."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=13.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.9",
+    "openai>=1.40.0",
+    "pdfplumber>=0.11.0",
+    "lxml>=5.0.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "rich>=13.7.0",
+    "aiofiles>=24.1.0",
+    "httpx>=0.27.0",
+    "mcp>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.5.0",
+]
+build = [
+    "pyinstaller>=6.0.0",
+]
+
+[project.scripts]
+appian-sentinel = "appian_sentinel.main:main"
+appian-sentinel-mcp = "appian_sentinel.mcp_server.server:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+"appian_sentinel/parser/sail_ast.py" = ["N802"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

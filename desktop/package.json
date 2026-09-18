@@ -1,0 +1,42 @@
+{
+  "name": "appian-sentinel-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Appian Sentinel standalone desktop app with an embedded Python engine sidecar.",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev:next": "next dev -p 3000",
+    "dev:electron": "cross-env SENTINEL_DEV=1 ELECTRON_RUN_AS_NODE= electron .",
+    "dev": "concurrently -k -n next,electron \"next dev -p 3000\" \"wait-on tcp:127.0.0.1:3000 && cross-env SENTINEL_DEV=1 ELECTRON_RUN_AS_NODE= electron .\"",
+    "build:next": "next build",
+    "build:sidecar": "cd .. && pyinstaller sidecar.spec --noconfirm",
+    "start": "electron .",
+    "dist": "npm run build:sidecar && next build && electron-builder"
+  },
+  "dependencies": {
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "concurrently": "9.0.1",
+    "cross-env": "7.0.3",
+    "electron": "44.4.2",
+    "electron-builder": "26.15.3",
+    "wait-on": "8.0.0"
+  },
+  "build": {
+    "appId": "com.pwc.appiansentinel",
+    "productName": "AppianSentinel",
+    "files": [
+      "electron/**/*",
+      "out/**/*"
+    ],
+    "extraResources": [
+      { "from": "../dist/appian-sentinel-sidecar", "to": "sidecar" }
+    ],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

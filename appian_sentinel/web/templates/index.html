@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appian Sentinel</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app">
+
+    <!-- ========== Header ========== -->
+    <header class="header">
+      <div class="header__title">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="flex-shrink:0">
+          <rect width="20" height="20" rx="4" fill="currentColor" opacity="0.15"/>
+          <path d="M10 3L16 7v6l-6 4-6-4V7l6-4z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+          <circle cx="10" cy="10" r="2" fill="currentColor"/>
+        </svg>
+        Appian <span>Sentinel</span>
+      </div>
+
+      <div class="header__actions">
+        <span id="connection-dot" class="connection-dot connection-dot--disconnected" title="WebSocket connection status"></span>
+        <span id="header-status" class="header__status header__status--idle">idle</span>
+        <button id="theme-toggle" class="theme-toggle" title="Toggle theme">&#9790;</button>
+        <button id="settings-btn" class="settings-btn" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+            <path d="M10 13a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M17.4 12.3a1.3 1.3 0 00.26 1.43l.05.05a1.58 1.58 0 01-1.12 2.7 1.58 1.58 0 01-1.12-.46l-.05-.05a1.3 1.3 0 00-1.43-.26 1.3 1.3 0 00-.79 1.19v.14a1.58 1.58 0 01-3.16 0v-.07A1.3 1.3 0 009.25 15.6a1.3 1.3 0 00-1.43.26l-.05.05a1.58 1.58 0 01-2.24-2.24l.05-.05a1.3 1.3 0 00.26-1.43 1.3 1.3 0 00-1.19-.79h-.14a1.58 1.58 0 010-3.16h.07A1.3 1.3 0 005.96 7.45a1.3 1.3 0 00-.26-1.43l-.05-.05a1.58 1.58 0 012.24-2.24l.05.05a1.3 1.3 0 001.43.26h.06a1.3 1.3 0 00.79-1.19v-.14a1.58 1.58 0 013.16 0v.07a1.3 1.3 0 00.79 1.19 1.3 1.3 0 001.43-.26l.05-.05a1.58 1.58 0 012.24 2.24l-.05.05a1.3 1.3 0 00-.26 1.43v.06a1.3 1.3 0 001.19.79h.14a1.58 1.58 0 010 3.16h-.07a1.3 1.3 0 00-1.19.79z" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ========== Settings Modal ========== -->
+    <div id="settings-overlay" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 class="modal-header__title">Settings</h3>
+          <button id="settings-close" class="modal-header__close" title="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label" for="setting-base-url">LiteLLM Base URL</label>
+            <input id="setting-base-url" class="form-input" type="text" placeholder="http://localhost:4000">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="setting-api-key">LiteLLM API Key</label>
+            <input id="setting-api-key" class="form-input" type="password" placeholder="Enter API key">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="setting-primary-model">Primary Model</label>
+            <input id="setting-primary-model" class="form-input" type="text" placeholder="bedrock.anthropic.claude-opus-4-8">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="setting-fast-model">Fast Model</label>
+            <input id="setting-fast-model" class="form-input" type="text" placeholder="bedrock.anthropic.claude-sonnet-5">
+          </div>
+          <div id="connection-status" class="connection-status hidden"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="settings-test" class="btn-test">Test Connection</button>
+          <div class="modal-footer__right">
+            <button id="settings-cancel" class="btn-cancel">Cancel</button>
+            <button id="settings-save" class="btn-save">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== Left sidebar ========== -->
+    <aside class="sidebar-left">
+
+      <!-- ZIP upload -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">Appian Export</div>
+        <div id="zip-upload" class="upload-area">
+          <div class="upload-area__icon">&#128230;</div>
+          <div class="upload-area__label">Drop ZIP here or click to upload</div>
+          <div class="upload-area__hint">.zip file exported from Appian</div>
+          <input id="zip-input" type="file" accept=".zip">
+        </div>
+      </section>
+
+      <!-- Story upload -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">User Story</div>
+        <div id="story-upload" class="upload-area">
+          <div class="upload-area__icon">&#128196;</div>
+          <div class="upload-area__label">Drop PDF here or click to upload</div>
+          <div class="upload-area__hint">.pdf user story document</div>
+          <input id="story-input" type="file" accept=".pdf">
+        </div>
+      </section>
+
+      <!-- Codebase summary -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">Codebase</div>
+        <div id="codebase-summary" style="font-size:12px;color:var(--text-muted)">
+          No codebase loaded.
+        </div>
+      </section>
+
+      <!-- Object tree -->
+      <div id="object-tree" class="object-tree"></div>
+    </aside>
+
+    <!-- ========== Center panel (chat) ========== -->
+    <main class="chat-panel">
+      <div id="chat-messages" class="chat-messages">
+        <!-- Welcome message -->
+        <div class="message message--system">
+          Welcome to Appian Sentinel. Upload an Appian export ZIP and a user story to get started, or type your requirements below.
+        </div>
+      </div>
+
+      <div class="chat-input">
+        <textarea
+          id="chat-textarea"
+          class="chat-input__textarea"
+          placeholder="Type a message or paste your user story ..."
+          rows="1"
+        ></textarea>
+        <button id="chat-send" class="chat-input__send" title="Send message">&#10148;</button>
+      </div>
+    </main>
+
+    <!-- ========== Right sidebar ========== -->
+    <aside class="sidebar-right">
+
+      <!-- Workflow progress -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">Workflow Progress</div>
+        <ol id="step-list" class="step-progress">
+          <li class="step-progress__item" data-step="1">
+            <span class="step-progress__number">1</span> Requirement Analysis
+          </li>
+          <li class="step-progress__item" data-step="2">
+            <span class="step-progress__number">2</span> Codebase Analysis
+          </li>
+          <li class="step-progress__item" data-step="3">
+            <span class="step-progress__number">3</span> Design
+          </li>
+          <li class="step-progress__item" data-step="4">
+            <span class="step-progress__number">4</span> Implementation
+          </li>
+          <li class="step-progress__item" data-step="5">
+            <span class="step-progress__number">5</span> Dependency Check
+          </li>
+          <li class="step-progress__item" data-step="6">
+            <span class="step-progress__number">6</span> Performance Check
+          </li>
+          <li class="step-progress__item" data-step="7">
+            <span class="step-progress__number">7</span> Code Quality
+          </li>
+          <li class="step-progress__item" data-step="8">
+            <span class="step-progress__number">8</span> Test Generation
+          </li>
+          <li class="step-progress__item" data-step="9">
+            <span class="step-progress__number">9</span> Final Packaging
+          </li>
+        </ol>
+      </section>
+
+      <!-- Fix iteration -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">Fix Loop</div>
+        <div id="iteration-badge" class="iteration-badge">
+          Fix iteration: <span class="iteration-badge__count">0</span> / 20
+        </div>
+      </section>
+
+      <!-- Test results -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">Test Results</div>
+        <div id="test-results" class="test-results">
+          No test results yet.
+        </div>
+      </section>
+
+      <!-- Download -->
+      <section class="sidebar-section">
+        <div class="sidebar-section__title">Output</div>
+        <button id="download-btn" class="download-btn" disabled>
+          &#11015; Download Rebuilt ZIP
+        </button>
+      </section>
+    </aside>
+
+  </div>
+
+  <script src="/static/chat.js"></script>
+</body>
+</html>
