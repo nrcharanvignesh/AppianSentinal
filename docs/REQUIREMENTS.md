@@ -158,7 +158,7 @@ checks pass.
     - Use Appian-style information hierarchy, navigation, density, controls, color,
       typography, focus behavior, loading, empty, and error states.
     - Acceptance: rendered desktop views pass the visual acceptance checklist.
-    - Status: PARTIAL. Rendered views were inspected at 1024x640 and 1440x900 and do follow Appian's information hierarchy: navy application bar, left Design Objects explorer with per-type icons, centre object tabs, bottom Problems/Dependencies/Tests/Changes/History/Output panel, right assistant rail. Automated checks passing today are no console errors, no horizontal overflow, and ASCII-only text. NOT MET because the stated acceptance is a visual acceptance checklist and no such checklist exists as a graded artifact; density, colour, typography, and focus behaviour have not been scored against Appian's design language.
+    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. All 40 pass after direct inspection of five rendered screenshots at 1024x640 and 1440x900; initial failures for development chrome, offline status color, focus evidence, and missing state evidence were fixed. `npx playwright test` passed 16 tests, including visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
 
 30. Show progress for upload, parsing, AI calls, all workflow steps, test runs,
     packaging, and downloads.
@@ -180,9 +180,9 @@ execution are reported separately because an offline application cannot prove ru
 behavior inside an Appian environment.
 
 Current standing against that gate: automated checks pass and package round trips pass,
-including the full 2,624-object rebuild. Two conditions are unmet. Rendered UI checks
-(R27, R28, R29) have specs under `desktop/tests/` that have not been run to a green
-visual acceptance pass. Clean-machine installation (R31) has a hash-verified artifact
+including the full 2,624-object rebuild. Rendered UI checks (R27, R28, R29) now have a
+green 16-test run and a 40-item visual acceptance pass. One condition remains unmet:
+clean-machine installation (R31) has a hash-verified artifact
 but no install on a machine without the development toolchain, so the full reference
-workflow has never been driven through the installed application. Until both clear,
+workflow has never been driven through the installed application. Until that clears,
 this application is not "flawless" and should not be described as such.

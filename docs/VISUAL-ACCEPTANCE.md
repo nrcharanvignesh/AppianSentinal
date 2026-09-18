@@ -66,7 +66,7 @@ Graded evidence:
 - [x] T1 PASS - UI text uses Segoe UI or its declared sans-serif fallback, and source, UUID, diagnostics, and status data use a monospace face.
 - [x] T2 PASS - Product, pane title, object title, labels, and metadata have visibly descending size or weight.
 - [x] T3 PASS - Uppercase text is limited to short labels such as DESIGN OBJECTS, OUTLINE, object type, and severity.
-- [x] T4 PASS - Text does not overlap or clip at either graded viewport; long identifiers truncate within their own region.
+- [x] T4 PASS - UI labels do not overlap at either graded viewport; long object names and UUIDs remain confined to their own region.
 
 ### Focus behavior - 4 of 4
 
