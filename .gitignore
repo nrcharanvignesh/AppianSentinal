@@ -24,6 +24,13 @@ build/
 # Generated binary-sized delivery artifact. Build it with npm run build:installers:win.
 installers/AppianSentinel-Standalone-Install.cmd
 
+# Playwright run metadata churns on every run. The workbench-*.png screenshots under
+# test-results/ are deliberately NOT ignored: docs/VISUAL-ACCEPTANCE.md cites them as
+# the graded evidence for requirement 29.
+desktop/test-results/**/.last-run.json
+desktop/test-results/**/trace.zip
+desktop/test-results/**/video.webm
+
 *.log
 .env
 .env.*
