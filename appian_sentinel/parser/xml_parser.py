@@ -27,7 +27,10 @@ from appian_sentinel.models.appian_objects import (
     ObjectType,
     OutboundIntegration,
     OutputMetadata,
+    Portal,
+    ProcessEdge,
     ProcessModel,
+    ProcessModelFolder,
     ProcessNode,
     ProcessVariable,
     RecordAction,
@@ -39,7 +42,12 @@ from appian_sentinel.models.appian_objects import (
     SecurityRole,
     Site,
     SitePage,
+    Swimlane,
+    TempoReport,
+    TranslationSet,
+    TranslationString,
     WebApi,
+    extract_uuid_references,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,6 +125,16 @@ def _findall(parent: etree._Element, tag: str) -> list[etree._Element]:
     return result
 
 
+def _attribute(element: etree._Element, name: str) -> str:
+    """Return an attribute with or without the Appian namespace."""
+    return element.get(name, "") or element.get(f"{{{APPIAN_NS}}}{name}", "")
+
+
+def _descendants(parent: etree._Element, tag: str) -> list[etree._Element]:
+    """Return descendants selected by namespace-independent local name."""
+    return list(parent.xpath(f'.//*[local-name()="{tag}"]'))
+
+
 def _parse_xml_file(xml_path: Path) -> etree._Element | None:
     """Parse an XML file and return the root element, or None on failure."""
     try:
@@ -140,16 +158,16 @@ def _get_en_us_value(string_map_el: etree._Element | None) -> str:
     """
     if string_map_el is None:
         return ""
-    for pair in string_map_el.findall("pair"):
-        locale_el = pair.find("locale")
+    for pair in _findall(string_map_el, "pair"):
+        locale_el = _find(pair, "locale")
         if locale_el is not None:
             lang = locale_el.get("lang", "")
             country = locale_el.get("country", "")
             if lang == "en" and country == "US":
-                return _text_or_cdata(pair.find("value"))
+                return _text_or_cdata(_find(pair, "value"))
     # Fallback: return first non-empty value
-    for pair in string_map_el.findall("pair"):
-        val = _text_or_cdata(pair.find("value"))
+    for pair in _findall(string_map_el, "pair"):
+        val = _text_or_cdata(_find(pair, "value"))
         if val:
             return val
     return ""
@@ -278,10 +296,9 @@ def parse_content_xml(xml_path: Path) -> AppianObject | None:
             continue
         if child.tag == "file":
             continue
-        # Treat any unrecognised discriminator as a generic folder-like object
-        logger.debug("Treating unknown content subtype <%s> as folder in %s", child.tag, xml_path)
+        logger.debug("Preserving unknown content subtype <%s> in %s", child.tag, xml_path)
         role_map = _parse_role_map(root.find("roleMap"))
-        obj = _parse_folder_generic(child, root)
+        obj = _parse_generic_content(child, root)
         obj.version_uuid = version_uuid
         obj.file_path = file_str
         obj.security_roles = role_map
@@ -419,6 +436,11 @@ def _parse_generic_content(el: etree._Element, root: etree._Element) -> AppianOb
         description=_text(_find(el, "description")),
         parent_uuid=_text(_find(el, "parentUuid")),
         object_type=ObjectType.UNKNOWN,
+        unknown_xml={
+            etree.QName(el).localname: [
+                etree.tostring(el, encoding="unicode", with_tail=False)
+            ]
+        },
     )
 
 
@@ -512,36 +534,67 @@ def parse_record_type_xml(xml_path: Path) -> RecordType | None:
 
     # Parse relationships
     relationships: list[RecordRelationship] = []
-    for rel_el in rt_el.findall(f"{{{APPIAN_NS}}}relationship") + rt_el.findall("relationship"):
-        rel_uuid = _text(rel_el.find("uuid")) or rel_el.get("uuid", "")
-        rel_name = _text(rel_el.find("name")) or rel_el.get("name", "")
-        related_rt = _text(rel_el.find("relatedRecordType")) or _text(
-            rel_el.find(f"{{{APPIAN_NS}}}relatedRecordType")
+    relationship_elements = _findall(rt_el, "recordRelationshipCfg") + _findall(rt_el, "relationship")
+    for rel_el in relationship_elements:
+        rel_uuid = _text(_find(rel_el, "uuid")) or _attribute(rel_el, "uuid")
+        rel_name = (
+            _text(_find(rel_el, "relationshipName"))
+            or _text(_find(rel_el, "name"))
+            or _attribute(rel_el, "name")
         )
-        rel_type = _text(rel_el.find("type")) or _text(
-            rel_el.find(f"{{{APPIAN_NS}}}type")
+        related_rt = (
+            _text(_find(rel_el, "targetRecordTypeUuid"))
+            or _text(_find(rel_el, "relatedRecordType"))
         )
+        rel_type = _text(_find(rel_el, "relationshipType")) or _text(_find(rel_el, "type"))
+        relationship_data = _text_or_cdata(_find(rel_el, "relationshipData"))
+        source_field_uuid = ""
+        target_field_uuid = ""
+        if relationship_data:
+            try:
+                import json
+
+                relationship_values = json.loads(relationship_data)
+                source_field_uuid = str(relationship_values.get("sourceRecordTypeFieldUuid", ""))
+                target_field_uuid = str(relationship_values.get("targetRecordTypeFieldUuid", ""))
+            except (TypeError, ValueError):
+                pass
         if rel_uuid or rel_name:
             relationships.append(RecordRelationship(
                 uuid=rel_uuid,
                 name=rel_name,
                 related_record_type_uuid=related_rt,
                 relationship_type=rel_type,
+                source_field_uuid=source_field_uuid,
+                target_field_uuid=target_field_uuid,
+                update_behavior=_text(_find(rel_el, "updateBehavior")),
+                relationship_data=relationship_data,
             ))
 
     # Parse record actions
     record_actions: list[RecordAction] = []
-    for ra_el in rt_el.findall(f"{{{APPIAN_NS}}}recordAction") + rt_el.findall("recordAction"):
-        ra_uuid = ra_el.get(f"{{{APPIAN_NS}}}uuid", "") or ra_el.get("uuid", "")
-        ra_name = _text(_find(ra_el, "nameExpr")) or _text(_find(ra_el, "name"))
-        pm_uuid_el = _find(ra_el, "processModel")
-        pm_uuid = ""
-        if pm_uuid_el is not None:
-            pm_uuid = pm_uuid_el.get(f"{{{APPIAN_NS}}}uuid", "") or pm_uuid_el.get("uuid", "") or _text(pm_uuid_el)
+    action_elements = _findall(rt_el, "relatedActionCfg") + _findall(rt_el, "recordAction")
+    for ra_el in action_elements:
+        ra_uuid = _attribute(ra_el, "uuid")
+        title_expr = _text_or_cdata(_find(ra_el, "titleExpr"))
+        static_title = _text(_find(ra_el, "staticTitleString"))
+        ra_name = static_title or title_expr or _text(_find(ra_el, "nameExpr")) or _text(_find(ra_el, "name"))
+        target_el = _find(ra_el, "target")
+        if target_el is None:
+            target_el = _find(ra_el, "processModel")
+        pm_uuid = _attribute(target_el, "uuid") if target_el is not None else ""
+        if target_el is not None and not pm_uuid:
+            pm_uuid = _text(target_el)
         record_actions.append(RecordAction(
             uuid=ra_uuid,
             name=ra_name,
             process_model_uuid=pm_uuid,
+            description=_text(_find(ra_el, "staticDescriptionString")),
+            reference_key=_text(_find(ra_el, "referenceKey")),
+            context_expr=_text_or_cdata(_find(ra_el, "contextExpr")),
+            visibility_expr=_text_or_cdata(_find(ra_el, "visibilityExpr")),
+            title_expr=title_expr,
+            description_expr=_text_or_cdata(_find(ra_el, "descriptionExpr")),
         ))
 
     # Extract SAIL expressions
@@ -629,26 +682,26 @@ def parse_process_model_xml(xml_path: Path) -> ProcessModel | None:
         uuid = _text_or_cdata(uuid_el)
 
         # Name is in <name><string-map>...
-        name_el = meta_el.find("name")
+        name_el = _find(meta_el, "name")
         if name_el is not None:
-            sm = name_el.find("string-map")
+            sm = _find(name_el, "string-map")
             name = _get_en_us_value(sm)
 
-        desc_el = meta_el.find("desc")
+        desc_el = _find(meta_el, "desc")
         if desc_el is not None:
-            sm = desc_el.find("string-map")
+            sm = _find(desc_el, "string-map")
             description = _get_en_us_value(sm)
 
         # Process display name expression
-        pn_el = meta_el.find("process-name")
+        pn_el = _find(meta_el, "process-name")
         if pn_el is not None:
-            sm = pn_el.find("string-map")
+            sm = _find(pn_el, "string-map")
             process_name_expr = _get_en_us_value(sm)
 
         # Notification recipients expression
-        notif_el = meta_el.find("pm-notification-settings")
+        notif_el = _find(meta_el, "pm-notification-settings")
         if notif_el is not None:
-            recip_el = notif_el.find("recipients-exp")
+            recip_el = _find(notif_el, "recipients-exp")
             notification_expr = _text_or_cdata(recip_el)
 
     # Parse process variables
@@ -667,9 +720,9 @@ def parse_process_model_xml(xml_path: Path) -> ProcessModel | None:
             val_el = pv_el.find(f"{{{APPIAN_NS}}}value")
             if val_el is not None:
                 pv_type = val_el.get(f"{{{XSI_NS}}}type", "")
-            is_param = _bool_text(pv_el.find("parameter"))
-            is_required = _bool_text(pv_el.find("required"))
-            is_hidden = _bool_text(pv_el.find("hidden"))
+            is_param = _bool_text(_find(pv_el, "parameter"))
+            is_required = _bool_text(_find(pv_el, "required"))
+            is_hidden = _bool_text(_find(pv_el, "hidden"))
             if pv_name:
                 pvs.append(ProcessVariable(
                     name=pv_name,
@@ -681,6 +734,8 @@ def parse_process_model_xml(xml_path: Path) -> ProcessModel | None:
 
     # Parse nodes
     nodes: list[ProcessNode] = []
+    pending_edges: list[tuple[str, str, str]] = []
+    gui_to_uuid: dict[str, str] = {}
     nodes_el = pm_el.find("nodes")
     if nodes_el is None:
         nodes_el = pm_el.find(f"{{{APPIAN_NS}}}nodes")
@@ -690,25 +745,70 @@ def parse_process_model_xml(xml_path: Path) -> ProcessModel | None:
             if local_tag != "node":
                 continue
             node_uuid = node_el.get("uuid", "")
+            gui_id = _text(_find(node_el, "guiId"))
+            if gui_id:
+                gui_to_uuid[gui_id] = node_uuid
             # Node name in string-map
             node_name = ""
-            fname_el = node_el.find("fname")
+            fname_el = _find(node_el, "fname")
             if fname_el is not None:
-                sm = fname_el.find("string-map")
+                sm = _find(fname_el, "string-map")
                 node_name = _get_en_us_value(sm)
 
-            # Collect all text that might contain UUID refs as expressions
+            ac_el = _find(node_el, "ac")
+            node_type = ""
+            if ac_el is not None:
+                node_type = _text(_find(ac_el, "local-id")) or _text(_find(ac_el, "name"))
+
+            lane_text = _text(_find(node_el, "lane"))
+            lane_index = int(lane_text) if lane_text.isdigit() else None
+
+            # Retain expression-bearing text, including Appian URNs and internal IDs.
             expressions: list[str] = []
             for descendant in node_el.iter():
                 if descendant.text:
                     text = descendant.text.strip()
-                    if '#"' in text:
+                    if extract_uuid_references(text):
                         expressions.append(text)
 
             nodes.append(ProcessNode(
                 uuid=node_uuid,
                 name=node_name,
+                node_type=node_type,
+                gui_id=gui_id,
+                lane_index=lane_index,
                 expressions=expressions,
+            ))
+            connections_el = _find(node_el, "connections")
+            if connections_el is not None:
+                for connection_el in _findall(connections_el, "connection"):
+                    target_gui_id = _text(_find(connection_el, "to"))
+                    flow_label = _text(_find(connection_el, "flowLabel"))
+                    pending_edges.append((gui_id, target_gui_id, flow_label))
+
+    edges = [
+        ProcessEdge(
+            source_uuid=gui_to_uuid.get(source_gui_id, ""),
+            target_uuid=gui_to_uuid.get(target_gui_id, ""),
+            source_gui_id=source_gui_id,
+            target_gui_id=target_gui_id,
+            label=label,
+        )
+        for source_gui_id, target_gui_id, label in pending_edges
+    ]
+
+    swimlanes: list[Swimlane] = []
+    lanes_el = _find(pm_el, "lanes")
+    if lanes_el is not None:
+        for index, lane_el in enumerate(_findall(lanes_el, "lane")):
+            assignment = _text_or_cdata(_find(lane_el, "assignment"))
+            swimlanes.append(Swimlane(
+                name=_text(_find(lane_el, "laneLabel")),
+                assignment_expression=assignment,
+                index=index,
+                is_vertical=_bool_text(_find(lane_el, "isVertical")),
+                is_assignment=_bool_text(_find(lane_el, "isLaneAssignment")),
+                unattended=_text(_find(lane_el, "unattended")) == "1",
             ))
 
     return ProcessModel(
@@ -720,7 +820,9 @@ def parse_process_model_xml(xml_path: Path) -> ProcessModel | None:
         folder_uuid=folder_uuid,
         security_roles=role_map,
         nodes=nodes,
+        edges=edges,
         process_variables=pvs,
+        swimlanes=swimlanes,
         notification_recipients_expr=notification_expr,
         process_name_expr=process_name_expr,
     )
@@ -1083,6 +1185,153 @@ def parse_data_store_xml(xml_path: Path) -> DataStore | None:
 
 
 # ---------------------------------------------------------------------------
+# Translation, portal, folder, and Tempo report parsers
+# ---------------------------------------------------------------------------
+
+def parse_translation_string_xml(xml_path: Path) -> TranslationString | None:
+    """Parse a translation string and all localized values."""
+    root = _parse_xml_file(xml_path)
+    if root is None:
+        return None
+    string_el = _find(root, "translationString")
+    if string_el is None:
+        return None
+
+    translations: dict[str, str] = {}
+    for translated_el in _descendants(string_el, "translatedText"):
+        locale_el = next(iter(_descendants(translated_el, "localeLanguageTag")), None)
+        value_candidates = [
+            child for child in translated_el
+            if etree.QName(child).localname == "translatedText"
+        ]
+        locale = _text(locale_el)
+        if locale and value_candidates:
+            translations[locale] = _text_or_cdata(value_candidates[-1])
+
+    variables = [
+        _text(variable_el)
+        for variable_el in _descendants(string_el, "translationStringVariable")
+        if _text(variable_el)
+    ]
+    return TranslationString(
+        uuid=_attribute(string_el, "uuid"),
+        name=_attribute(string_el, "name"),
+        description=_text(_find(string_el, "description")),
+        version_uuid=_text(_find(root, "versionUuid")),
+        file_path=str(xml_path),
+        translation_set_uuid=_text(_find(string_el, "translationSetUuid")),
+        translator_notes=_text(_find(string_el, "translatorNotes")),
+        translations=translations,
+        variables=variables,
+    )
+
+
+def parse_translation_set_xml(xml_path: Path) -> TranslationSet | None:
+    """Parse a translation set and its enabled locales."""
+    root = _parse_xml_file(xml_path)
+    if root is None:
+        return None
+    set_el = _find(root, "translationSet")
+    if set_el is None:
+        return None
+    locales = [_text(el) for el in _descendants(set_el, "localeLanguageTag") if _text(el)]
+    default_el = _find(set_el, "defaultLocale")
+    default_locale_el = (
+        next(iter(_descendants(default_el, "localeLanguageTag")), None)
+        if default_el is not None
+        else None
+    )
+    return TranslationSet(
+        uuid=_attribute(set_el, "uuid"),
+        name=_attribute(set_el, "name"),
+        description=_text(_find(set_el, "description")),
+        version_uuid=_text(_find(root, "versionUuid")),
+        file_path=str(xml_path),
+        security_roles=_parse_role_map(_find(root, "roleMap")),
+        enabled_locales=list(dict.fromkeys(locales)),
+        default_locale=_text(default_locale_el),
+    )
+
+
+def parse_process_model_folder_xml(xml_path: Path) -> ProcessModelFolder | None:
+    """Parse a process model folder."""
+    root = _parse_xml_file(xml_path)
+    if root is None:
+        return None
+    folder_el = _find(root, "processModelFolder")
+    if folder_el is None:
+        return None
+    return ProcessModelFolder(
+        uuid=_text(_find(folder_el, "uuid")) or _attribute(folder_el, "uuid"),
+        name=_text(_find(folder_el, "name")) or _attribute(folder_el, "name"),
+        description=_text(_find(folder_el, "description")),
+        version_uuid=_text(_find(root, "versionUuid")),
+        file_path=str(xml_path),
+        security_roles=_parse_role_map(_find(root, "roleMap")),
+    )
+
+
+def parse_tempo_report_xml(xml_path: Path) -> TempoReport | None:
+    """Parse a legacy Tempo report."""
+    root = _parse_xml_file(xml_path)
+    if root is None:
+        return None
+    report_el = _find(root, "tempoReport")
+    if report_el is None:
+        return None
+    return TempoReport(
+        uuid=_attribute(report_el, "uuid"),
+        name=_attribute(report_el, "name"),
+        description=_text(_find(report_el, "description")),
+        version_uuid=_text(_find(root, "versionUuid")),
+        file_path=str(xml_path),
+        security_roles=_parse_role_map(_find(root, "roleMap")),
+        ui_expression=_text_or_cdata(_find(report_el, "uiExpr")),
+        url_stub=_text(_find(report_el, "urlStub")),
+    )
+
+
+def parse_portal_xml(xml_path: Path) -> Portal | None:
+    """Parse an Appian Portal and its navigation pages."""
+    root = _parse_xml_file(xml_path)
+    if root is None:
+        return None
+    portal_el = _find(root, "portal")
+    if portal_el is None:
+        return None
+
+    pages: list[SitePage] = []
+    for page_el in _findall(portal_el, "navigationNode"):
+        ui_el = _find(page_el, "uiObject")
+        pages.append(SitePage(
+            uuid=_attribute(page_el, "uuid"),
+            name_expr=_text(_find(page_el, "staticName")),
+            description=_text(_find(page_el, "description")),
+            url_stub=_text(_find(page_el, "urlStub")),
+            ui_object_uuid=_attribute(ui_el, "uuid") if ui_el is not None else "",
+            icon_id=_text(_find(page_el, "iconId")),
+            visibility_expr=_text_or_cdata(_find(page_el, "visibilityExpr")),
+            page_width=_text(_find(page_el, "pageWidth")),
+        ))
+
+    service_account_el = _find(portal_el, "serviceAccountUser")
+    return Portal(
+        uuid=_attribute(portal_el, "uuid"),
+        name=_attribute(portal_el, "name"),
+        description=_text(_find(portal_el, "description")),
+        version_uuid=_text(_find(root, "versionUuid")),
+        file_path=str(xml_path),
+        security_roles=_parse_role_map(_find(root, "roleMap")),
+        display_name=_text(_find(portal_el, "displayName")),
+        url_stub=_text(_find(portal_el, "urlStub")),
+        hostname=_text(_find(portal_el, "hostname")),
+        published=_bool_text(_find(portal_el, "published")),
+        service_account_uuid=_attribute(service_account_el, "uuid") if service_account_el is not None else "",
+        pages=pages,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher: parse any file based on its parent directory
 # ---------------------------------------------------------------------------
 
@@ -1106,6 +1355,11 @@ def parse_appian_xml(xml_path: Path) -> AppianObject | None:
         "site": parse_site_xml,
         "group": parse_group_xml,
         "dataStore": parse_data_store_xml,
+        "translationString": parse_translation_string_xml,
+        "translationSet": parse_translation_set_xml,
+        "processModelFolder": parse_process_model_folder_xml,
+        "tempoReport": parse_tempo_report_xml,
+        "portal": parse_portal_xml,
     }
 
     parser_fn = parser_map.get(parent_dir)

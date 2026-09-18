@@ -1,0 +1,20 @@
+<recordTypeHaul xmlns:a="http://www.appian.com/ae/types/2009"
+                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <versionUuid>record-version</versionUuid>
+  <recordType a:uuid="11111111-1111-4111-8111-111111111111" name="Reference Record">
+    <a:relatedActionCfg a:uuid="action-1">
+      <a:target a:uuid="22222222-2222-4222-8222-222222222222" xsi:type="a:ProcessModel"/>
+      <a:contextExpr>{record: rv!record}</a:contextExpr>
+      <a:staticTitleString>Approve</a:staticTitleString>
+      <a:referenceKey>approve</a:referenceKey>
+    </a:relatedActionCfg>
+    <a:recordRelationshipCfg>
+      <uuid>relationship-1</uuid>
+      <relationshipName>owner</relationshipName>
+      <targetRecordTypeUuid>33333333-3333-4333-8333-333333333333</targetRecordTypeUuid>
+      <relationshipType>MANY_TO_ONE</relationshipType>
+      <relationshipData>{"sourceRecordTypeFieldUuid":"source-field","targetRecordTypeFieldUuid":"target-field"}</relationshipData>
+      <updateBehavior>NON_CASCADING</updateBehavior>
+    </a:recordRelationshipCfg>
+  </recordType>
+</recordTypeHaul>

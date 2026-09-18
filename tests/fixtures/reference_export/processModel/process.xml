@@ -1,0 +1,36 @@
+<processModelHaul xmlns="http://www.appian.com/ae/types/2009">
+  <versionUuid>process-version</versionUuid>
+  <folderUuid>55555555-5555-4555-8555-555555555555</folderUuid>
+  <process_model_port>
+    <pm>
+      <meta>
+        <uuid>22222222-2222-4222-8222-222222222222</uuid>
+        <name><string-map><pair><locale country="US" lang="en"/><value>Reference Process</value></pair></string-map></name>
+      </meta>
+      <nodes>
+        <node uuid="node-start">
+          <guiId>0</guiId>
+          <fname><string-map><pair><locale country="US" lang="en"/><value>Start</value></pair></string-map></fname>
+          <lane>0</lane>
+          <ac><local-id>core.0</local-id><name>Start Node</name></ac>
+          <connections><connection><to>1</to><flowLabel>continue</flowLabel></connection></connections>
+        </node>
+        <node uuid="node-end">
+          <guiId>1</guiId>
+          <fname><string-map><pair><locale country="US" lang="en"/><value>End</value></pair></string-map></fname>
+          <lane>0</lane>
+          <ac><local-id>core.1</local-id><name>End Node</name></ac>
+          <connections/>
+        </node>
+      </nodes>
+      <lanes>
+        <lane>
+          <laneLabel>System</laneLabel>
+          <isVertical>false</isVertical>
+          <isLaneAssignment>true</isLaneAssignment>
+          <unattended>1</unattended>
+        </lane>
+      </lanes>
+    </pm>
+  </process_model_port>
+</processModelHaul>

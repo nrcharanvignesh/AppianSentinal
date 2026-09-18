@@ -16,6 +16,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from appian_sentinel.config import settings
+from appian_sentinel.parser.sail_diagnostics import SailDiagnostic, analyze_sail
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class GeneratedSail:
     confidence: float = 0.0
     notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    diagnostics: list[SailDiagnostic] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -148,22 +150,38 @@ class SailGenerator:
         try:
             data = json.loads(cleaned)
             if isinstance(data, dict) and "code" in data:
+                code = str(data["code"])
+                analysis = analyze_sail(code)
+                warnings = list(data.get("warnings", []))
+                warnings.extend(
+                    f"{item.code} L{item.line}:C{item.column} {item.message}"
+                    for item in analysis.diagnostics
+                )
                 return GeneratedSail(
-                    code=data["code"],
+                    code=code,
                     confidence=float(data.get("confidence", 0.5)),
-                    notes=data.get("notes", []),
-                    warnings=data.get("warnings", []),
+                    notes=list(data.get("notes", [])),
+                    warnings=warnings,
+                    diagnostics=analysis.diagnostics,
                 )
         except (json.JSONDecodeError, ValueError):
             pass
 
         # Fallback: treat entire output as SAIL code
         logger.warning("LLM response was not valid JSON; treating as raw SAIL code")
+        analysis = analyze_sail(cleaned)
         return GeneratedSail(
             code=cleaned,
             confidence=0.3,
             notes=["Response was not in structured JSON format"],
-            warnings=["Confidence is low because the output could not be parsed as JSON"],
+            warnings=[
+                "Confidence is low because the output could not be parsed as JSON",
+                *(
+                    f"{item.code} L{item.line}:C{item.column} {item.message}"
+                    for item in analysis.diagnostics
+                ),
+            ],
+            diagnostics=analysis.diagnostics,
         )
 
     @staticmethod

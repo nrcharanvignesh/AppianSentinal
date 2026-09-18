@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -181,7 +182,24 @@ def parse_application_xml(app_xml_path: Path) -> dict[str, str]:
 # Codebase map builder — main entry point
 # ---------------------------------------------------------------------------
 
-ProgressCallback = Any  # Callable[[str, int, int, str], None] | None
+ProgressCallback = Callable[[str, int, int, str], None] | None
+
+OBJECT_SCAN_PATTERNS: dict[str, str] = {
+    "content": "*.xml",
+    "processModel": "*.xml",
+    "processModelFolder": "*.xml",
+    "recordType": "*.xml",
+    "datatype": "*.xsd",
+    "webApi": "*.xml",
+    "connectedSystem": "*.xml",
+    "site": "*.xml",
+    "portal": "*.xml",
+    "group": "*.xml",
+    "dataStore": "*.xml",
+    "tempoReport": "*.xml",
+    "translationSet": "*.xml",
+    "translationString": "*.xml",
+}
 
 
 def _count_files(export_dir: Path, scan_dirs: dict[str, str]) -> int:
@@ -225,18 +243,7 @@ def build_codebase_map(
         if on_progress is not None:
             on_progress(phase, current, total, detail)
 
-    # Directories to scan (maps directory name -> file glob pattern)
-    scan_dirs = {
-        "content": "*.xml",
-        "processModel": "*.xml",
-        "recordType": "*.xml",
-        "datatype": "*.xsd",
-        "webApi": "*.xml",
-        "connectedSystem": "*.xml",
-        "site": "*.xml",
-        "group": "*.xml",
-        "dataStore": "*.xml",
-    }
+    scan_dirs = OBJECT_SCAN_PATTERNS
 
     # Pre-count so progress is accurate
     file_count = _count_files(export_dir, scan_dirs)
@@ -272,25 +279,37 @@ def build_codebase_map(
 
     # 5. Parse all XML/XSD files in supported directories
     objects: dict[str, AppianObject] = {}
+    uuid_collisions: dict[str, list[AppianObject]] = defaultdict(list)
     by_type: dict[str, list[str]] = defaultdict(list)
 
     parsed_count = 0
     parse_errors = 0
+    parse_failures: list[str] = []
 
     for dir_name, pattern in scan_dirs.items():
         target_dir = export_dir / dir_name
         if not target_dir.exists():
             continue
-        for file_path in target_dir.glob(pattern):
+        for file_path in sorted(target_dir.glob(pattern)):
             parsed_count += 1
             obj = parse_appian_xml(file_path)
             if obj is None:
                 parse_errors += 1
+                parse_failures.append(file_path.relative_to(export_dir).as_posix())
             elif obj.uuid:
-                objects[obj.uuid] = obj
-                by_type[obj.object_type.value].append(obj.uuid)
+                obj.file_path = file_path.relative_to(export_dir).as_posix()
+                if not obj.name:
+                    obj.name = uuid_to_name.get(obj.uuid, "")
+                if obj.uuid in objects:
+                    uuid_collisions[obj.uuid].append(obj)
+                else:
+                    objects[obj.uuid] = obj
+                    by_type[obj.object_type.value].append(obj.uuid)
                 if obj.uuid not in uuid_to_name and obj.name:
                     uuid_to_name[obj.uuid] = obj.name
+            else:
+                parse_errors += 1
+                parse_failures.append(file_path.relative_to(export_dir).as_posix())
 
             if parsed_count % 50 == 0 or parsed_count == file_count:
                 _emit(
@@ -306,9 +325,22 @@ def build_codebase_map(
     )
 
     # Build name_to_uuid (reverse of uuid_to_name)
-    name_to_uuid: dict[str, str] = {}
+    name_to_uuids_sets: dict[str, set[str]] = defaultdict(set)
     for uid, uname in uuid_to_name.items():
-        name_to_uuid[uname] = uid
+        if uname:
+            name_to_uuids_sets[uname].add(uid)
+    for uid, obj in objects.items():
+        if obj.name:
+            name_to_uuids_sets[obj.name].add(uid)
+    name_to_uuids = {
+        name: sorted(uuids)
+        for name, uuids in sorted(name_to_uuids_sets.items())
+    }
+    name_to_uuid = {
+        name: uuids[0]
+        for name, uuids in name_to_uuids.items()
+        if len(uuids) == 1
+    }
 
     # 6. Build forward dependency graph
     _emit("dependencies", 1 + file_count, total_steps, f"Building dependency graph for {len(objects)} objects…")
@@ -336,8 +368,12 @@ def build_codebase_map(
         export_timestamp=export_timestamp,
         plugins=plugins,
         objects=objects,
+        uuid_collisions=dict(uuid_collisions),
         uuid_to_name=uuid_to_name,
         name_to_uuid=name_to_uuid,
+        name_to_uuids=name_to_uuids,
+        scanned_files=parsed_count,
+        parse_failures=parse_failures,
         dependencies=dependencies,
         reverse_dependencies=dict(reverse_dependencies),
         by_type=dict(by_type),

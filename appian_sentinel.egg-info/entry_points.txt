@@ -1,0 +1,3 @@
+[console_scripts]
+appian-sentinel = appian_sentinel.main:main
+appian-sentinel-mcp = appian_sentinel.mcp_server.server:main

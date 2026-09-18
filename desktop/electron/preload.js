@@ -2,16 +2,22 @@
 
 const { contextBridge } = require('electron');
 
-// Read the sidecar port passed via webPreferences.additionalArguments.
-function readSidecarPort() {
-  const arg = process.argv.find((a) => a.startsWith('--sentinel-port='));
-  return arg ? arg.split('=')[1] : '8000';
+function desktopArgument(name, fallback) {
+  const prefix = `--${name}=`;
+  const raw = process.argv.find((value) => value.startsWith(prefix));
+  if (!raw) return fallback;
+  try {
+    return decodeURIComponent(raw.slice(prefix.length));
+  } catch {
+    return fallback;
+  }
 }
 
-const port = readSidecarPort();
-
-contextBridge.exposeInMainWorld('__SENTINEL_API__', {
-  baseUrl: `http://127.0.0.1:${port}`,
-  wsUrl: `ws://127.0.0.1:${port}`,
-  port,
+const api = Object.freeze({
+  baseUrl: desktopArgument('sentinel-base-url', 'http://127.0.0.1:7851'),
+  wsUrl: desktopArgument('sentinel-ws-url', 'ws://127.0.0.1:7851'),
+  port: Number(desktopArgument('sentinel-port', '7851')),
+  token: desktopArgument('sentinel-token', ''),
 });
+
+contextBridge.exposeInMainWorld('__SENTINEL_API__', api);

@@ -1,11 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Static export — Electron serves the built `out/` folder locally in prod.
-  output: 'export',
+  output: 'standalone',
   reactStrictMode: true,
+  devIndicators: false,
   images: { unoptimized: true },
-  // Assets are served from the app root by Electron's tiny static server, so
-  // default absolute asset paths ("/_next/...") work.
+  generateBuildId: async () => 'appian-sentinel-desktop',
 };
 
 module.exports = nextConfig;

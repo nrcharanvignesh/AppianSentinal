@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 import pdfplumber
 
@@ -79,10 +80,21 @@ Rules:
 """
 
 
-async def extract_user_story_from_text(raw_text: str) -> UserStory:
+async def extract_user_story_from_text(
+    raw_text: str,
+    *,
+    source_id: str = "chat",
+    source_kind: Literal["chat", "pdf", "ado"] = "chat",
+) -> UserStory:
     """Extract a structured :class:`UserStory` from raw text (not a PDF)."""
     if not raw_text.strip():
-        return UserStory(title="Untitled", raw_text="", description="(empty input)")
+        return UserStory(
+            title="Untitled",
+            raw_text="",
+            description="(empty input)",
+            source_id=source_id,
+            source_kind=source_kind,
+        )
 
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -96,6 +108,7 @@ async def extract_user_story_from_text(raw_text: str) -> UserStory:
     ]
     story = await llm.chat_structured(messages, response_schema=UserStory, model=llm.fast_model)
     story.raw_text = raw_text
+    _set_source(story, source_id, source_kind)
     return story
 
 
@@ -110,7 +123,13 @@ async def extract_user_story(pdf_path: Path) -> UserStory:
 
     if not raw_text.strip():
         logger.warning("PDF %s yielded no text; returning minimal UserStory.", pdf_path.name)
-        return UserStory(title=pdf_path.stem, raw_text="", description="(empty document)")
+        return UserStory(
+            title=pdf_path.stem,
+            raw_text="",
+            description="(empty document)",
+            source_id=pdf_path.name,
+            source_kind="pdf",
+        )
 
     messages: list[dict] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -135,6 +154,7 @@ async def extract_user_story(pdf_path: Path) -> UserStory:
 
     # Attach the original raw text so downstream consumers can reference it.
     story.raw_text = raw_text
+    _set_source(story, pdf_path.name, "pdf")
 
     logger.info(
         "Extracted user story '%s' with %d acceptance criteria.",
@@ -142,3 +162,16 @@ async def extract_user_story(pdf_path: Path) -> UserStory:
         len(story.acceptance_criteria),
     )
     return story
+
+
+def _set_source(
+    story: UserStory,
+    source_id: str,
+    source_kind: Literal["chat", "pdf", "ado"],
+) -> None:
+    """Apply source metadata to a story and all of its criteria."""
+    story.source_id = source_id
+    story.source_kind = source_kind
+    for criterion in story.acceptance_criteria:
+        criterion.source_id = source_id
+        criterion.source_kind = source_kind

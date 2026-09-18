@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,8 @@ class AcceptanceCriterion(BaseModel):
     given: str = Field(default="", description="Given precondition")
     when: str = Field(default="", description="When action/event")
     then: str = Field(default="", description="Then expected outcome")
+    source_id: str = ""
+    source_kind: Literal["chat", "pdf", "ado"] = "chat"
 
 
 class UserStory(BaseModel):
@@ -30,6 +33,8 @@ class UserStory(BaseModel):
     acceptance_criteria: list[AcceptanceCriterion] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     raw_text: str = Field(default="", description="Original unprocessed text from the source document")
+    source_id: str = ""
+    source_kind: Literal["chat", "pdf", "ado"] = "chat"
 
 
 # ---------------------------------------------------------------------------

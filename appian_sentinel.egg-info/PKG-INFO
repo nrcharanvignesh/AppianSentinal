@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: appian-sentinel
+Version: 0.1.0
+Summary: Agentic Appian development automation — parse exports, analyze stories, generate/modify objects, validate with SAIL AST, and repackage.
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.30.0
+Requires-Dist: websockets>=13.0
+Requires-Dist: jinja2>=3.1.0
+Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: openai>=1.40.0
+Requires-Dist: pdfplumber>=0.11.0
+Requires-Dist: lxml>=5.0.0
+Requires-Dist: pydantic>=2.7.0
+Requires-Dist: pydantic-settings>=2.3.0
+Requires-Dist: rich>=13.7.0
+Requires-Dist: aiofiles>=24.1.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: mcp>=1.2.0
+Requires-Dist: openpyxl>=3.1.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24.0; extra == "dev"
+Requires-Dist: httpx>=0.27.0; extra == "dev"
+Requires-Dist: ruff>=0.5.0; extra == "dev"
+Provides-Extra: build
+Requires-Dist: pyinstaller>=6.0.0; extra == "build"

@@ -32,6 +32,10 @@ class ObjectType(str, Enum):
     RULES_FOLDER = "rules_folder"
     OUTBOUND_INTEGRATION = "outbound_integration"
     TRANSLATION_STRING = "translation_string"
+    TRANSLATION_SET = "translation_set"
+    PORTAL = "portal"
+    PROCESS_MODEL_FOLDER = "process_model_folder"
+    TEMPO_REPORT = "tempo_report"
     UNKNOWN = "unknown"
 
 
@@ -70,6 +74,10 @@ class RecordRelationship(BaseModel):
     name: str = ""
     related_record_type_uuid: str = ""
     relationship_type: str = ""  # ONE_TO_MANY, MANY_TO_ONE, etc.
+    source_field_uuid: str = ""
+    target_field_uuid: str = ""
+    update_behavior: str = ""
+    relationship_data: str = ""
 
 
 class RecordAction(BaseModel):
@@ -78,6 +86,12 @@ class RecordAction(BaseModel):
     uuid: str = ""
     name: str = ""
     process_model_uuid: str = ""
+    description: str = ""
+    reference_key: str = ""
+    context_expr: str = ""
+    visibility_expr: str = ""
+    title_expr: str = ""
+    description_expr: str = ""
 
 
 class ProcessVariable(BaseModel):
@@ -96,7 +110,19 @@ class ProcessNode(BaseModel):
     uuid: str = ""
     name: str = ""
     node_type: str = ""  # start, end, user_input_task, sub_process, etc.
+    gui_id: str = ""
+    lane_index: int | None = None
     expressions: list[str] = Field(default_factory=list)
+
+
+class ProcessEdge(BaseModel):
+    """A directed connection between two process nodes."""
+
+    source_uuid: str = ""
+    target_uuid: str = ""
+    source_gui_id: str = ""
+    target_gui_id: str = ""
+    label: str = ""
 
 
 class Swimlane(BaseModel):
@@ -104,6 +130,10 @@ class Swimlane(BaseModel):
 
     name: str = ""
     assignment_expression: str = ""
+    index: int = 0
+    is_vertical: bool = False
+    is_assignment: bool = False
+    unattended: bool = False
 
 
 class SecurityRole(BaseModel):
@@ -149,16 +179,11 @@ class OutputMetadata(BaseModel):
 # UUID reference extraction helper
 # ---------------------------------------------------------------------------
 
-# Matches #"<uuid>"  which is how SAIL references other objects
-_UUID_REF_PATTERN = re.compile(r'#"([^"]+)"')
-
-# Also match urn:appian:record-type:v1:<uuid> and urn:appian:record-field:v1:<uuid>/<field-uuid>
-_URN_RECORD_TYPE_PATTERN = re.compile(
-    r'urn:appian:record-type:v1:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
-)
-_URN_RECORD_FIELD_PATTERN = re.compile(
-    r'urn:appian:record-field:v1:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'
-)
+# Appian references can be quoted SAIL identifiers, bare internal identifiers,
+# or URNs whose first path segment identifies the owning design object.
+_QUOTED_REF_PATTERN = re.compile(r'#"([^"]+)"')
+_INTERNAL_REF_PATTERN = re.compile(r"(?<![A-Za-z0-9])(_[a-z]-[A-Za-z0-9_-]+)")
+_URN_REF_PATTERN = re.compile(r"urn:appian:[a-z0-9-]+:v\d+:([^\"'\s,)\]}]+)", re.IGNORECASE)
 
 
 def extract_uuid_references(text: str | None) -> set[str]:
@@ -173,23 +198,17 @@ def extract_uuid_references(text: str | None) -> set[str]:
 
     refs: set[str] = set()
 
-    for m in _UUID_REF_PATTERN.finditer(text):
+    for m in _QUOTED_REF_PATTERN.finditer(text):
         ref = m.group(1)
-        # Skip built-in system references
         if ref.startswith("SYSTEM_SYSRULES_"):
             continue
-        # For URN-style refs, extract the record type UUID portion
-        if ref.startswith("urn:appian:record-type:v1:"):
-            uuid_part = ref[len("urn:appian:record-type:v1:"):]
-            refs.add(uuid_part)
-        elif ref.startswith("urn:appian:record-field:v1:"):
-            # Format: urn:appian:record-field:v1:<record-uuid>/<field-uuid>
-            remainder = ref[len("urn:appian:record-field:v1:"):]
-            record_uuid = remainder.split("/")[0]
-            refs.add(record_uuid)
-        else:
+        if not ref.lower().startswith("urn:appian:"):
             refs.add(ref)
 
+    for match in _URN_REF_PATTERN.finditer(text):
+        refs.add(match.group(1).split("/", 1)[0])
+
+    refs.update(match.group(1) for match in _INTERNAL_REF_PATTERN.finditer(text))
     return refs
 
 
@@ -208,6 +227,7 @@ class AppianObject(BaseModel):
     file_path: str = ""
     version_uuid: str = ""
     security_roles: list[SecurityRole] = Field(default_factory=list)
+    unknown_xml: dict[str, list[str]] = Field(default_factory=dict)
 
     def get_uuid_references(self) -> set[str]:
         """Return all UUIDs this object references (override in subclasses)."""
@@ -338,6 +358,13 @@ class RecordType(AppianObject):
         for ra in self.record_actions:
             if ra.process_model_uuid:
                 refs.add(ra.process_model_uuid)
+            refs |= extract_uuid_references(ra.context_expr)
+            refs |= extract_uuid_references(ra.visibility_expr)
+            refs |= extract_uuid_references(ra.title_expr)
+            refs |= extract_uuid_references(ra.description_expr)
+        for relationship in self.relationships:
+            if relationship.related_record_type_uuid:
+                refs.add(relationship.related_record_type_uuid)
         return refs
 
 
@@ -347,6 +374,7 @@ class ProcessModel(AppianObject):
     object_type: ObjectType = ObjectType.PROCESS_MODEL
     folder_uuid: str = ""
     nodes: list[ProcessNode] = Field(default_factory=list)
+    edges: list[ProcessEdge] = Field(default_factory=list)
     process_variables: list[ProcessVariable] = Field(default_factory=list)
     swimlanes: list[Swimlane] = Field(default_factory=list)
     notification_recipients_expr: str = ""
@@ -443,5 +471,57 @@ class TranslationString(AppianObject):
     """An Appian translation string (i18n entry)."""
 
     object_type: ObjectType = ObjectType.TRANSLATION_STRING
-    locale: str = ""
-    value: str = ""
+    translation_set_uuid: str = ""
+    translator_notes: str = ""
+    translations: dict[str, str] = Field(default_factory=dict)
+    variables: list[str] = Field(default_factory=list)
+
+    def get_uuid_references(self) -> set[str]:
+        return {self.translation_set_uuid} if self.translation_set_uuid else set()
+
+
+class TranslationSet(AppianObject):
+    """A collection of localized translation strings."""
+
+    object_type: ObjectType = ObjectType.TRANSLATION_SET
+    enabled_locales: list[str] = Field(default_factory=list)
+    default_locale: str = ""
+
+
+class ProcessModelFolder(AppianObject):
+    """A folder that contains process models."""
+
+    object_type: ObjectType = ObjectType.PROCESS_MODEL_FOLDER
+
+
+class TempoReport(AppianObject):
+    """A legacy Tempo report."""
+
+    object_type: ObjectType = ObjectType.TEMPO_REPORT
+    ui_expression: str = ""
+    url_stub: str = ""
+
+    def get_uuid_references(self) -> set[str]:
+        return extract_uuid_references(self.ui_expression)
+
+
+class Portal(AppianObject):
+    """An Appian Portal and its navigation pages."""
+
+    object_type: ObjectType = ObjectType.PORTAL
+    display_name: str = ""
+    url_stub: str = ""
+    hostname: str = ""
+    published: bool = False
+    service_account_uuid: str = ""
+    pages: list[SitePage] = Field(default_factory=list)
+
+    def get_uuid_references(self) -> set[str]:
+        refs: set[str] = set()
+        if self.service_account_uuid:
+            refs.add(self.service_account_uuid)
+        for page in self.pages:
+            refs |= extract_uuid_references(page.visibility_expr)
+            if page.ui_object_uuid:
+                refs.add(page.ui_object_uuid)
+        return refs

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
+import tempfile
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -44,17 +46,46 @@ def build_appian_zip(
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Update META-INF files before zipping.
-    _update_manifest(export_dir)
-    _update_export_log(export_dir, modifications)
-
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(export_dir.rglob("*")):
-            if file_path.is_file():
+    export_dir = export_dir.resolve()
+    manifest_path = export_dir / _MANIFEST_PATH
+    manifest = manifest_path.read_bytes() if manifest_path.exists() else b"Manifest-Version: 1.0\n"
+    source_log = export_dir / _EXPORT_LOG_PATH
+    if source_log.exists() and not modifications:
+        export_log = source_log.read_bytes()
+    else:
+        export_log = _updated_export_log(
+            source_log.read_text(encoding="utf-8", errors="replace") if source_log.exists() else "",
+            modifications,
+        ).encode("utf-8")
+    files = [
+        path
+        for path in sorted(export_dir.rglob("*"))
+        if path.is_file() and path.resolve() != output_path
+    ]
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as zf:
+            written = {_MANIFEST_PATH, _EXPORT_LOG_PATH}
+            zf.writestr(_MANIFEST_PATH, manifest)
+            zf.writestr(_EXPORT_LOG_PATH, export_log)
+            for file_path in files:
                 arcname = file_path.relative_to(export_dir).as_posix()
-                zf.write(file_path, arcname)
+                if arcname not in written:
+                    zf.write(file_path, arcname)
+        with zipfile.ZipFile(temporary, "r") as zf:
+            if zf.testzip() is not None:
+                raise ValueError("Generated ZIP failed CRC validation")
+        os.replace(temporary, output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
-    logger.info("Built Appian ZIP at %s (%d files)", output_path, _count_files(export_dir))
+    logger.info("Built Appian ZIP at %s (%d files)", output_path, len(files))
     return output_path
 
 
@@ -102,49 +133,42 @@ def validate_zip_structure(zip_path: Path) -> tuple[bool, list[str]]:
 # ------------------------------------------------------------------
 
 
-def _update_manifest(export_dir: Path) -> None:
-    """Write / update the ``MANIFEST.MF`` with a current timestamp."""
-    meta_dir = export_dir / "META-INF"
-    meta_dir.mkdir(parents=True, exist_ok=True)
-
-    manifest_path = meta_dir / "MANIFEST.MF"
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    lines = [
-        "Manifest-Version: 1.0",
-        f"Export-Date: {now}",
-        "Created-By: AppianSentinel",
-        "",
-    ]
-
-    manifest_path.write_text("\n".join(lines), encoding="utf-8")
+_SUCCESS_LINE = re.compile(r'^(\S+)\s+(\d+)\s+(\S+)\s+"(.+)"$')
 
 
-def _update_export_log(export_dir: Path, modifications: list[dict[str, Any]]) -> None:
-    """Append entries for newly created objects to ``export.log``."""
-    meta_dir = export_dir / "META-INF"
-    meta_dir.mkdir(parents=True, exist_ok=True)
-    log_path = meta_dir / "export.log"
+def _updated_export_log(existing: str, modifications: list[dict[str, Any]]) -> str:
+    """Return a valid Appian Success section without changing the source file."""
+    success_lines: list[str] = []
+    suffix: list[str] = []
+    in_suffix = False
+    for line in existing.splitlines():
+        if re.match(r"^\d{4}-\d{2}-\d{2}", line) or in_suffix:
+            in_suffix = True
+            suffix.append(line)
+        elif _SUCCESS_LINE.match(line):
+            success_lines.append(line)
 
-    existing_content = ""
-    if log_path.exists():
-        existing_content = log_path.read_text(encoding="utf-8")
+    indexed = {
+        match.group(3): index
+        for index, line in enumerate(success_lines)
+        if (match := _SUCCESS_LINE.match(line)) is not None
+    }
+    for modification in modifications:
+        object_uuid = str(modification.get("uuid", "")).strip()
+        name = str(modification.get("name", "unknown")).replace('"', "'")
+        if not object_uuid:
+            continue
+        if object_uuid in indexed:
+            continue
+        object_type = str(modification.get("export_type") or modification.get("type", "unknown"))
+        numeric_id = int(modification.get("numeric_id", modification.get("id", 0)) or 0)
+        entry = f'{object_type} {numeric_id} {object_uuid} "{name}"'
+        indexed[object_uuid] = len(success_lines)
+        success_lines.append(entry)
 
-    new_entries: list[str] = []
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = [f"Success ({len(success_lines)}):", *success_lines]
+    if suffix:
+        body.extend(["", *suffix])
+    return "\n".join(body) + "\n"
 
-    for mod in modifications:
-        name = mod.get("name", "unknown")
-        obj_uuid = mod.get("uuid", "")
-        obj_type = mod.get("type", "unknown")
-        action = mod.get("action", "modify")
-        entry = f"[{now}] {action.upper()} {obj_type} \"{name}\" (uuid={obj_uuid})"
-        new_entries.append(entry)
-
-    if new_entries:
-        updated = existing_content.rstrip("\n") + "\n" + "\n".join(new_entries) + "\n"
-        log_path.write_text(updated, encoding="utf-8")
-
-
-def _count_files(directory: Path) -> int:
-    return sum(1 for _ in directory.rglob("*") if _.is_file())
+# End of module.

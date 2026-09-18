@@ -11,6 +11,7 @@ from appian_sentinel.models.user_story import (
     ImpactReport,
     RiskLevel,
 )
+from appian_sentinel.security import mask_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -189,8 +190,11 @@ class ImpactAnalyzer:
                 model=llm.fast_model,
             )
             return result.breaking_changes
-        except Exception:
-            logger.exception("LLM breaking-change analysis failed; falling back to heuristic.")
+        except Exception as exc:
+            logger.error(
+                "LLM breaking-change analysis failed; falling back to heuristic: %s",
+                mask_secrets(str(exc)),
+            )
             return self._heuristic_breaking_changes(reverse_deps)
 
     @staticmethod
@@ -346,6 +350,9 @@ class ImpactAnalyzer:
             )
             logger.info("Compatibility check found %d issue(s).", len(result.issues))
             return result.issues
-        except Exception:
-            logger.exception("LLM compatibility check failed; returning empty issue list.")
+        except Exception as exc:
+            logger.error(
+                "LLM compatibility check failed; returning empty issue list: %s",
+                mask_secrets(str(exc)),
+            )
             return []

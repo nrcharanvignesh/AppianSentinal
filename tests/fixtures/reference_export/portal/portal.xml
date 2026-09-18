@@ -1,0 +1,16 @@
+<portalHaul xmlns:a="http://www.appian.com/ae/types/2009">
+  <versionUuid>portal-version</versionUuid>
+  <portal a:uuid="44444444-4444-4444-8444-444444444444" name="Reference Portal">
+    <description>Portal fixture</description>
+    <published>true</published>
+    <displayName>Reference Portal</displayName>
+    <urlStub>reference</urlStub>
+    <serviceAccountUser a:uuid="service-account"/>
+    <navigationNode a:uuid="page-1">
+      <staticName>Home</staticName>
+      <urlStub>home</urlStub>
+      <uiObject a:uuid="ui-object-1"/>
+      <visibilityExpr>true</visibilityExpr>
+    </navigationNode>
+  </portal>
+</portalHaul>

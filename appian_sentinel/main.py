@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hmac
 import logging
+import os
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -44,6 +47,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_loopback_token(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Require the optional desktop token except for the liveness probe."""
+    token = os.environ.get("SENTINEL_API_TOKEN")
+    supplied = request.headers.get("X-Sentinel-Token", "")
+    if (
+        token
+        and request.url.path != "/api/health"
+        and not hmac.compare_digest(supplied, token)
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": {"reason": "invalid_sentinel_token"}},
+        )
+    return await call_next(request)
 
 # Mount static assets (CSS, JS)
 app.mount(

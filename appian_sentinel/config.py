@@ -1,20 +1,44 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
+
+from appian_sentinel.knowledge.genai_catalog import (
+    GenAIConfigDefaults,
+    get_config_defaults,
+)
+
+_FALLBACK_BASE_URL = "http://localhost:4000"
+_FALLBACK_PRIMARY_MODEL = "bedrock.anthropic.claude-opus-4-8"
+_FALLBACK_FAST_MODEL = "bedrock.anthropic.claude-sonnet-5"
+_CATALOG_DEFAULTS = get_config_defaults(
+    _FALLBACK_BASE_URL,
+    _FALLBACK_PRIMARY_MODEL,
+    _FALLBACK_FAST_MODEL,
+) or GenAIConfigDefaults(
+    base_url=_FALLBACK_BASE_URL,
+    primary_model=_FALLBACK_PRIMARY_MODEL,
+    fast_model=_FALLBACK_FAST_MODEL,
+)
 
 
 class Settings(BaseSettings):
-    litellm_base_url: str = "http://localhost:4000"
+    litellm_base_url: str = _CATALOG_DEFAULTS.base_url
     litellm_api_key: str = ""
+    llm_protocol: Literal["auto", "openai", "anthropic"] = "auto"
 
-    sentinel_primary_model: str = "bedrock.anthropic.claude-opus-4-8"
-    sentinel_fast_model: str = "bedrock.anthropic.claude-sonnet-5"
+    sentinel_primary_model: str = _CATALOG_DEFAULTS.primary_model
+    sentinel_fast_model: str = _CATALOG_DEFAULTS.fast_model
 
     sentinel_host: str = "0.0.0.0"
     sentinel_port: int = 8000
-    sentinel_workspace: Path = Path("./workspace")
+    sentinel_workspace: Path = Field(
+        default=Path("./workspace"),
+        validation_alias=AliasChoices("SENTINEL_WORKSPACE_DIR", "sentinel_workspace"),
+    )
 
     sentinel_max_agent_iterations: int = 20
     sentinel_max_tokens: int = 64000

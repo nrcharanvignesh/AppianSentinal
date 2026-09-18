@@ -1,0 +1,8 @@
+<tempoReportHaul xmlns:a="http://www.appian.com/ae/types/2009">
+  <versionUuid>report-version</versionUuid>
+  <tempoReport a:uuid="88888888-8888-4888-8888-888888888888" name="Reference Report">
+    <a:description>Tempo report fixture</a:description>
+    <a:uiExpr>=#"_a-0000ec3a-acb2-8000-9ba6-011c48011c48_78136"()</a:uiExpr>
+    <a:urlStub>reference-report</a:urlStub>
+  </tempoReport>
+</tempoReportHaul>

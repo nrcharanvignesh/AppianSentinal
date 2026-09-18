@@ -16,9 +16,13 @@ appian_export/
 desktop/node_modules/
 desktop/.next/
 desktop/out/
+desktop/release/
 desktop/dist/
 dist/
 build/
+
+# Generated binary-sized delivery artifact. Build it with npm run build:installers:win.
+installers/AppianSentinel-Standalone-Install.cmd
 
 *.log
 .env

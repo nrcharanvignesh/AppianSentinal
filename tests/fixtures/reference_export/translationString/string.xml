@@ -1,0 +1,14 @@
+<translationStringHaul xmlns:a="http://www.appian.com/ae/types/2009">
+  <versionUuid>string-version</versionUuid>
+  <translationString a:uuid="77777777-7777-4777-8777-777777777777">
+    <a:translationSetUuid>66666666-6666-4666-8666-666666666666</a:translationSetUuid>
+    <a:description>Greeting</a:description>
+    <a:translatorNotes>Reference shape</a:translatorNotes>
+    <translationTexts>
+      <translatedText>
+        <a:translationLocale><a:localeLanguageTag>en-US</a:localeLanguageTag></a:translationLocale>
+        <a:translatedText>Hello</a:translatedText>
+      </translatedText>
+    </translationTexts>
+  </translationString>
+</translationStringHaul>

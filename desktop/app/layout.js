@@ -1,8 +1,9 @@
 import './globals.css';
+import './workbench.css';
 
 export const metadata = {
   title: 'Appian Sentinel',
-  description: 'Agentic Appian development automation — desktop',
+  description: 'Appian development workbench for desktop',
 };
 
 export default function RootLayout({ children }) {

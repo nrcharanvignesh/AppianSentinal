@@ -1,0 +1,8 @@
+<processModelFolderHaul>
+  <versionUuid>folder-version</versionUuid>
+  <processModelFolder>
+    <name>Reference Processes</name>
+    <uuid>55555555-5555-4555-8555-555555555555</uuid>
+    <description>Process model folder fixture</description>
+  </processModelFolder>
+</processModelFolderHaul>

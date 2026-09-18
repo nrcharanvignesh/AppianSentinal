@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import traceback
+import re
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
 
+from pydantic import ValidationError
+
+from appian_sentinel.agent.progress import ProgressResult, emit_progress
 from appian_sentinel.agent.state import (
     STEP_NAMES,
     AgentState,
@@ -14,11 +17,23 @@ from appian_sentinel.agent.state import (
     MessageType,
 )
 from appian_sentinel.analyzer import llm_client, pdf_extractor
+from appian_sentinel.analyzer.story_analyzer import StoryAnalyzer
 from appian_sentinel.config import settings
 from appian_sentinel.generator.object_writer import write_object
+from appian_sentinel.models.test_case import (
+    CoverageReport,
+    TestCaseResult,
+    TestCaseStatus,
+    TestExecutionScope,
+    TestRunResult,
+    TestSuite,
+)
+from appian_sentinel.models.user_story import QuestionPriority, UserStory
 from appian_sentinel.packager.patch_builder import build_patch_zip
 from appian_sentinel.packager.zip_builder import build_appian_zip, validate_zip_structure
 from appian_sentinel.parser import codebase_map as codebase_map_builder
+from appian_sentinel.security import mask_secrets
+from appian_sentinel.services.workspace import WorkspaceHistoryService
 
 # ---------------------------------------------------------------------------
 # Sibling modules built by other agents -- imported by name so the
@@ -32,6 +47,11 @@ logger = logging.getLogger(__name__)
 # Type alias for the optional callback the web layer can register to receive
 # every message the orchestrator produces in real time.
 StatusCallback = Callable[[ChatMessage], Awaitable[None]]
+T = TypeVar("T")
+
+# Fallback acceptance-criteria ID scanner, used when the parsed user story
+# carries no structured criteria.
+_AC_ID_PATTERN = re.compile(r"\bAC[-_ ]?(\d{1,3})\b", re.IGNORECASE)
 
 
 class Orchestrator:
@@ -54,6 +74,7 @@ class Orchestrator:
         # Will be populated when the user uploads the Appian export ZIP.
         self._export_dir: Path | None = None
         self._workspace = settings.sentinel_workspace
+        self._step_result_overrides: dict[int, ProgressResult] = {}
 
         # asyncio.Event that the fix-loop / step methods wait on when
         # they need clarifying answers from the user.
@@ -85,8 +106,31 @@ class Orchestrator:
         try:
             # --- Parse the codebase ----------------------------------------
             await self._emit_status("Loading and parsing the Appian export ...")
-            codebase = await asyncio.to_thread(
-                codebase_map_builder.build_codebase_map, export_dir
+            await self.emit_progress(
+                phase="parsing.codebase",
+                current=0,
+                total=1,
+                detail="Codebase parsing started.",
+            )
+            try:
+                codebase = await asyncio.to_thread(
+                    codebase_map_builder.build_codebase_map, export_dir
+                )
+            except Exception as exc:
+                await self.emit_progress(
+                    phase="parsing.codebase",
+                    current=1,
+                    total=1,
+                    detail=f"Codebase parsing failed: {exc}",
+                    result="failed",
+                )
+                raise
+            await self.emit_progress(
+                phase="parsing.codebase",
+                current=1,
+                total=1,
+                detail="Codebase parsing completed.",
+                result="ok",
             )
             self.state.codebase_map = (
                 codebase.model_dump() if hasattr(codebase, "model_dump") else codebase
@@ -97,7 +141,31 @@ class Orchestrator:
             if story_path:
                 self.state.story_path = str(story_path)
                 await self._emit_status("Extracting user story from PDF ...")
-                story = await pdf_extractor.extract_user_story(story_path)
+                model = settings.sentinel_fast_model
+                await self.emit_progress(
+                    phase="llm.story_extract",
+                    current=0,
+                    total=1,
+                    detail=f"Story extraction LLM call started: model {model}.",
+                )
+                try:
+                    story = await pdf_extractor.extract_user_story(story_path)
+                except Exception as exc:
+                    await self.emit_progress(
+                        phase="llm.story_extract",
+                        current=1,
+                        total=1,
+                        detail=f"Story extraction LLM call failed: model {model}: {exc}",
+                        result="failed",
+                    )
+                    raise
+                await self.emit_progress(
+                    phase="llm.story_extract",
+                    current=1,
+                    total=1,
+                    detail=f"Story extraction LLM call completed: model {model}.",
+                    result="ok",
+                )
                 self.state.user_story = story.model_dump() if hasattr(story, "model_dump") else dict(story)
 
             if story is None:
@@ -112,14 +180,19 @@ class Orchestrator:
                 story = self.state.user_story
 
             # --- Execute the 9-step workflow --------------------------------
-            req_analysis = await self.step_1_requirement_analysis(story)
-            await self.step_2_codebase_analysis()
-            design = await self.step_3_design(req_analysis)
-            await self.step_4_implementation(design)
-            await self.step_5_dependency_check()
-            await self.step_6_performance_check()
-            await self.step_7_code_quality_check()
-            await self.step_8_test_generation(design)
+            req_analysis = await self._run_workflow_step(
+                1, self.step_1_requirement_analysis(story)
+            )
+            await self._run_workflow_step(2, self.step_2_codebase_analysis())
+            design = await self._run_workflow_step(
+                3, self.step_3_design(req_analysis)
+            )
+            await self._pause_for_high_priority_questions(story)
+            await self._run_workflow_step(4, self.step_4_implementation(design))
+            await self._run_workflow_step(5, self.step_5_dependency_check())
+            await self._run_workflow_step(6, self.step_6_performance_check())
+            await self._run_workflow_step(7, self.step_7_code_quality_check())
+            await self._run_workflow_step(8, self.step_8_test_generation(design))
 
             # --- Agentic fix loop ------------------------------------------
             all_passed = await self.run_fix_loop()
@@ -132,7 +205,7 @@ class Orchestrator:
                 )
 
             # --- Package ---------------------------------------------------
-            await self.step_9_final_packaging()
+            await self._run_workflow_step(9, self.step_9_final_packaging())
 
             self.state.set_status(AgentStatus.COMPLETE)
             await self._emit_status("Workflow complete. Download the rebuilt ZIP from the sidebar.")
@@ -143,10 +216,11 @@ class Orchestrator:
             self.state.add_system_message("Session cancelled.")
             raise
         except Exception as exc:
-            logger.exception("Orchestrator run failed")
+            safe_error = mask_secrets(str(exc))
+            logger.error("Orchestrator run failed: %s", safe_error)
             self.state.set_status(AgentStatus.ERROR)
             await self._emit_assistant(
-                f"An error occurred: {exc}\n\n```\n{traceback.format_exc()}\n```",
+                f"An error occurred: {safe_error}",
                 message_type=MessageType.ERROR,
             )
             return self.state
@@ -176,15 +250,36 @@ class Orchestrator:
         # --- Accept a user story when idle --------------------------------
         if self.state.status in (AgentStatus.IDLE, AgentStatus.WAITING_FOR_USER) and self.state.user_story is None:
             await self._emit_status("Parsing your requirements ...")
+            model = settings.sentinel_fast_model
+            await self.emit_progress(
+                phase="llm.requirements_parse",
+                current=0,
+                total=1,
+                detail=f"Requirements parsing LLM call started: model {model}.",
+            )
             try:
                 story = await pdf_extractor.extract_user_story_from_text(message)
                 self.state.user_story = story.model_dump() if hasattr(story, "model_dump") else dict(story)
+                await self.emit_progress(
+                    phase="llm.requirements_parse",
+                    current=1,
+                    total=1,
+                    detail=f"Requirements parsing LLM call completed: model {model}.",
+                    result="ok",
+                )
                 ack = self.state.add_assistant_message(
                     "User story received and parsed. Starting the workflow ..."
                 )
                 yield ack
                 self._user_reply_event.set()
             except Exception as exc:
+                await self.emit_progress(
+                    phase="llm.requirements_parse",
+                    current=1,
+                    total=1,
+                    detail=f"Requirements parsing LLM call failed: model {model}: {exc}",
+                    result="failed",
+                )
                 err = self.state.add_assistant_message(
                     f"Could not parse the story: {exc}",
                     message_type=MessageType.ERROR,
@@ -193,18 +288,39 @@ class Orchestrator:
             return
 
         # --- Free-form LLM chat (idle or during workflow) -----------------
+        model = settings.sentinel_fast_model
+        await self.emit_progress(
+            phase="llm.chat",
+            current=0,
+            total=1,
+            detail=f"LLM call started: model {model}.",
+        )
         try:
             response_text = await llm_client.llm.chat(
                 [
                     {"role": m.role, "content": m.content}
                     for m in self.state.messages[-20:]
                 ],
-                model=settings.sentinel_fast_model,
+                model=model,
                 max_tokens=2048,
+            )
+            await self.emit_progress(
+                phase="llm.chat",
+                current=1,
+                total=1,
+                detail=f"LLM call completed: model {model}.",
+                result="ok",
             )
             reply = self.state.add_assistant_message(response_text)
             yield reply
         except Exception as exc:
+            await self.emit_progress(
+                phase="llm.chat",
+                current=1,
+                total=1,
+                detail=f"LLM call failed: model {model}: {exc}",
+                result="failed",
+            )
             err = self.state.add_assistant_message(
                 f"LLM error: {exc}",
                 message_type=MessageType.ERROR,
@@ -214,6 +330,52 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Workflow steps
     # ------------------------------------------------------------------
+
+    async def _run_workflow_step(
+        self,
+        step: int,
+        operation: Awaitable[T],
+    ) -> T:
+        """Run one workflow step with structured start and terminal events."""
+        self.state.set_step(step)
+        phase = f"workflow.step_{step}"
+        name = STEP_NAMES[step]
+        await self.emit_progress(
+            phase=phase,
+            current=step,
+            total=9,
+            detail=f"Step {step}/9 started: {name}.",
+        )
+        try:
+            value = await operation
+        except asyncio.CancelledError:
+            await self.emit_progress(
+                phase=phase,
+                current=step,
+                total=9,
+                detail=f"Step {step}/9 blocked: {name}: session cancelled.",
+                result="blocked",
+            )
+            raise
+        except Exception as exc:
+            await self.emit_progress(
+                phase=phase,
+                current=step,
+                total=9,
+                detail=f"Step {step}/9 failed: {name}: {exc}",
+                result="failed",
+            )
+            raise
+
+        result = self._step_result_overrides.pop(step, "ok")
+        await self.emit_progress(
+            phase=phase,
+            current=step,
+            total=9,
+            detail=f"Step {step}/9 ended: {name}: {result}.",
+            result=result,
+        )
+        return value
 
     async def step_1_requirement_analysis(self, story: Any) -> dict[str, Any]:
         self.state.set_step(1)
@@ -312,6 +474,7 @@ class Orchestrator:
                             self.state.modified_files.append(str(out_path))
                 except Exception as exc:
                     logger.warning("Failed to write object %s: %s", obj.get("name"), exc)
+                    self._step_result_overrides[4] = "failed"
 
         self.state.generated_objects = objects
         await self._emit_assistant(result_text, message_type=MessageType.CODE)
@@ -387,6 +550,13 @@ class Orchestrator:
         suite = {"raw": result_text}
 
         # Use the tester module to build a formal test suite
+        model = llm_client.llm.default_model
+        await self.emit_progress(
+            phase="llm.test_suite",
+            current=0,
+            total=1,
+            detail=f"Test suite LLM call started: model {model}.",
+        )
         try:
             tg = test_generator.TestGenerator()
             story_text = str(self.state.user_story) if self.state.user_story else ""
@@ -399,11 +569,41 @@ class Orchestrator:
                 if hasattr(generated_suite, "model_dump")
                 else dict(generated_suite)
             )
+            await self.emit_progress(
+                phase="llm.test_suite",
+                current=1,
+                total=1,
+                detail=f"Test suite LLM call completed: model {model}.",
+                result="ok",
+            )
         except Exception as exc:
-            logger.warning("TestGenerator.generate_test_suite failed: %s", exc)
+            logger.warning(
+                "TestGenerator.generate_test_suite failed: %s",
+                mask_secrets(str(exc)),
+            )
+            self._step_result_overrides[8] = "failed"
+            await self.emit_progress(
+                phase="llm.test_suite",
+                current=1,
+                total=1,
+                detail=f"Test suite LLM call failed: model {model}: {exc}",
+                result="failed",
+            )
 
         self.state.test_suite = suite
+
+        # Deterministic acceptance-criteria coverage check (no LLM involved).
+        coverage = self.evaluate_coverage()
+        suite["coverage"] = coverage.model_dump(mode="json")
         await self._emit_assistant(result_text)
+        if coverage.is_complete:
+            await self._emit_status(f"Coverage check: {coverage.summary}")
+        else:
+            self._step_result_overrides[8] = "failed"
+            await self._emit_assistant(
+                f"Coverage check failed: {coverage.summary}",
+                message_type=MessageType.ERROR,
+            )
         return suite
 
     async def step_9_final_packaging(self) -> Path:
@@ -414,26 +614,59 @@ class Orchestrator:
             raise RuntimeError("No export directory available for packaging.")
 
         output_path = self._workspace / f"output_{self.state.session_id}.zip"
-
-        zip_path = await asyncio.to_thread(
-            build_appian_zip,
-            self._export_dir,
-            output_path,
-            self.state.generated_objects,
+        await self.emit_progress(
+            phase="packaging.full_zip",
+            current=0,
+            total=1,
+            detail="Full ZIP packaging started.",
         )
-
-        valid, issues = await asyncio.to_thread(validate_zip_structure, zip_path)
+        try:
+            zip_path = await asyncio.to_thread(
+                build_appian_zip,
+                self._export_dir,
+                output_path,
+                self.state.generated_objects,
+            )
+            valid, issues = await asyncio.to_thread(validate_zip_structure, zip_path)
+        except Exception as exc:
+            self._step_result_overrides[9] = "failed"
+            await self.emit_progress(
+                phase="packaging.full_zip",
+                current=1,
+                total=1,
+                detail=f"Full ZIP packaging failed: {exc}",
+                result="failed",
+            )
+            raise
         if not valid:
+            self._step_result_overrides[9] = "failed"
             await self._emit_assistant(
                 "ZIP structure validation warnings:\n" + "\n".join(f"- {i}" for i in issues),
                 message_type=MessageType.ERROR,
             )
+        await self.emit_progress(
+            phase="packaging.full_zip",
+            current=1,
+            total=1,
+            detail=(
+                "Full ZIP packaging completed."
+                if valid
+                else f"Full ZIP packaging failed validation with {len(issues)} issue(s)."
+            ),
+            result="ok" if valid else "failed",
+        )
 
         self.state.output_zip_path = str(zip_path)
 
         # --- Patch package: only the objects this story touched --------------
         if self.state.generated_objects:
             patch_path = self._workspace / f"patch_{self.state.session_id}.zip"
+            await self.emit_progress(
+                phase="packaging.patch_zip",
+                current=0,
+                total=1,
+                detail="Patch ZIP packaging started.",
+            )
             try:
                 result = await asyncio.to_thread(
                     build_patch_zip,
@@ -444,27 +677,53 @@ class Orchestrator:
                 )
                 self.state.patch_zip_path = result["zip_path"]
                 summary = (
-                    f"Patch package ready: `{Path(result['zip_path']).name}` — "
+                    f"Patch package ready: `{Path(result['zip_path']).name}` -- "
                     f"{len(result['included'])} object(s), {result['file_count']} file(s)."
                 )
                 if result["missing"]:
-                    summary += f"\n⚠️ {len(result['missing'])} object(s) could not be located."
+                    summary += f"\n[WARN] {len(result['missing'])} object(s) could not be located."
                 if result["dependency_warnings"]:
                     warn_lines = "\n".join(
                         f"- `{w['source']}` references `{w['missing_ref_name']}` (not in patch)"
                         for w in result["dependency_warnings"][:15]
                     )
                     summary += (
-                        f"\n⚠️ {len(result['dependency_warnings'])} dependency reference(s) "
+                        f"\n[WARN] {len(result['dependency_warnings'])} dependency reference(s) "
                         f"are not included in the patch:\n{warn_lines}"
                     )
                 await self._emit_assistant(summary)
+                await self.emit_progress(
+                    phase="packaging.patch_zip",
+                    current=1,
+                    total=1,
+                    detail=(
+                        f"Patch ZIP packaging completed: "
+                        f"{result['file_count']} file(s)."
+                    ),
+                    result="ok",
+                )
             except Exception as exc:
+                self._step_result_overrides[9] = "failed"
                 logger.warning("Patch build failed: %s", exc)
+                await self.emit_progress(
+                    phase="packaging.patch_zip",
+                    current=1,
+                    total=1,
+                    detail=f"Patch ZIP packaging failed: {exc}",
+                    result="failed",
+                )
                 await self._emit_assistant(
                     f"Full package ready, but patch build failed: {exc}",
                     message_type=MessageType.ERROR,
                 )
+        else:
+            await self.emit_progress(
+                phase="packaging.patch_zip",
+                current=1,
+                total=1,
+                detail="Patch ZIP packaging deferred: no generated objects.",
+                result="deferred",
+            )
 
         await self._emit_assistant(f"Output package ready: `{zip_path.name}`")
         return zip_path
@@ -476,64 +735,85 @@ class Orchestrator:
     async def run_fix_loop(self) -> bool:
         """Run tests, fix failures, repeat until green or budget exhausted.
 
-        Returns ``True`` when all tests pass.
+        Returns ``True`` only when the run proves every counted test case
+        passed.  An empty suite, a skipped-only suite, and a suite whose tests
+        all need a live Appian environment never return ``True``.
         """
         self.state.set_status(AgentStatus.TESTING)
         self.state.iteration = 0
 
         while self.state.iteration < self.state.max_iterations:
             self.state.iteration += 1
+            iteration_phase = f"fix_loop.iteration_{self.state.iteration}"
+            await self.emit_progress(
+                phase=iteration_phase,
+                current=self.state.iteration,
+                total=self.state.max_iterations,
+                detail=(
+                    f"Fix loop iteration {self.state.iteration}/"
+                    f"{self.state.max_iterations} started."
+                ),
+            )
             await self._emit_status(
                 f"Fix loop iteration {self.state.iteration}/{self.state.max_iterations} -- running tests ..."
             )
 
             # 1. Run the static SAIL validation / test suite ---------------
-            try:
-                code_map = {
-                    obj.get("name", ""): obj.get("sail_code", "")
-                    for obj in self.state.generated_objects
-                    if obj.get("sail_code")
-                }
-                known_uuids = set(
-                    (self.state.codebase_map or {}).get("uuid_to_name", {}).keys()
-                )
-                runner = test_runner.StaticTestRunner(
-                    sail_code_map=code_map,
-                    known_uuids=known_uuids,
-                )
-                structured = (self.state.test_suite or {}).get("structured")
-                if structured and "test_cases" in structured:
-                    from appian_sentinel.models.test_case import TestSuite as TSSuite
-                    ts = TSSuite(**structured)
-                    run_result = await runner.run_suite(ts)
-                    self.state.test_results = (
-                        run_result.model_dump()
-                        if hasattr(run_result, "model_dump")
-                        else {"passed": True, "failures": []}
-                    )
-                else:
-                    self.state.test_results = {"passed": True, "failures": []}
-            except Exception as exc:
-                logger.warning("StaticTestRunner.run_suite failed: %s", exc)
-                self.state.test_results = {"error": str(exc), "passed": False, "failures": []}
+            run_result = await self.run_tests()
+            self.state.test_results = self._test_results_payload(run_result)
 
             # 2. Check results ---------------------------------------------
-            all_passed = self.state.test_results.get("passed", False)
-            failures = self.state.test_results.get("failures", [])
-
-            if all_passed and not failures:
-                await self._emit_status("All tests passed!")
+            if run_result.success:
+                result: ProgressResult = (
+                    "deferred" if run_result.deferred else "ok"
+                )
+                await self.emit_progress(
+                    phase=iteration_phase,
+                    current=self.state.iteration,
+                    total=self.state.max_iterations,
+                    detail=f"Fix loop iteration ended: {run_result.verdict_reason}.",
+                    result=result,
+                )
+                await self._emit_status(f"All tests passed: {run_result.verdict_reason}")
                 return True
 
-            # 3. Emit current failures to the user -------------------------
-            failure_summary = "\n".join(
-                f"- {f.get('name', 'unknown')}: {f.get('message', '')}"
-                for f in failures
+            # 3. Emit current problems to the user -------------------------
+            problems = run_result.failures + run_result.unverified
+            if not problems:
+                # Nothing the LLM can act on: empty suite, or every test needs
+                # a live Appian environment.
+                result = "deferred" if run_result.deferred else "blocked"
+                await self.emit_progress(
+                    phase=iteration_phase,
+                    current=self.state.iteration,
+                    total=self.state.max_iterations,
+                    detail=f"Fix loop iteration ended: {run_result.verdict_reason}.",
+                    result=result,
+                )
+                await self._emit_assistant(
+                    "Tests are not green and there is nothing to fix automatically: "
+                    f"{run_result.verdict_reason}.",
+                    message_type=MessageType.ERROR,
+                )
+                return False
+
+            problem_summary = "\n".join(
+                f"- [{p.status.value}] {p.name or p.test_id}: {p.message}"
+                for p in problems
+            )
+            deferred_note = (
+                f"\n{run_result.deferred} test(s) need a live Appian environment "
+                "and were not executed."
+                if run_result.deferred
+                else ""
             )
             await self._emit_assistant(
-                f"**Iteration {self.state.iteration}** -- {len(failures)} test failure(s):\n{failure_summary}",
+                f"**Iteration {self.state.iteration}** -- {len(run_result.failures)} failure(s), "
+                f"{len(run_result.unverified)} unverified test(s):\n"
+                f"{problem_summary}{deferred_note}",
                 message_type=MessageType.ERROR,
             )
+            failures = [p.model_dump(mode="json") for p in problems]
 
             # 4. Ask the LLM to fix ----------------------------------------
             self.state.set_status(AgentStatus.FIXING)
@@ -548,7 +828,17 @@ class Orchestrator:
                 generated_objects=self.state.generated_objects,
                 design=self.state.solution_design,
             )
-            fix_text = await self._call_llm(fix_prompt)
+            try:
+                fix_text = await self._call_llm(fix_prompt)
+            except Exception as exc:
+                await self.emit_progress(
+                    phase=iteration_phase,
+                    current=self.state.iteration,
+                    total=self.state.max_iterations,
+                    detail=f"Fix loop iteration failed: {exc}",
+                    result="failed",
+                )
+                raise
             fixed_objects = self._parse_generated_objects(fix_text)
 
             # 5. Apply fixes -----------------------------------------------
@@ -569,8 +859,193 @@ class Orchestrator:
 
             await self._emit_assistant(fix_text, message_type=MessageType.CODE)
             self.state.set_status(AgentStatus.TESTING)
+            await self.emit_progress(
+                phase=iteration_phase,
+                current=self.state.iteration,
+                total=self.state.max_iterations,
+                detail="Fix loop iteration ended with unresolved test failures.",
+                result="failed",
+            )
 
         return False
+
+    # ------------------------------------------------------------------
+    # Test execution and coverage
+    # ------------------------------------------------------------------
+
+    async def run_tests(self) -> TestRunResult:
+        """Execute the stored test suite with the static SAIL runner."""
+        phase = f"tests.run_{max(self.state.iteration, 1)}"
+        await self.emit_progress(
+            phase=phase,
+            current=0,
+            total=1,
+            detail="Static test run started.",
+        )
+        suite = self.build_test_suite()
+        if suite is None or not suite.test_cases:
+            logger.warning("No test case available; the run cannot be green.")
+            run_result = TestRunResult()
+            await self._emit_test_run_result(phase, run_result, "blocked")
+            return run_result
+
+        code_map = {
+            obj.get("name", ""): obj.get("sail_code", "")
+            for obj in self.state.generated_objects
+            if obj.get("sail_code")
+        }
+        known_uuids = set(
+            (self.state.codebase_map or {}).get("uuid_to_name", {}).keys()
+        )
+        try:
+            runner = test_runner.StaticTestRunner(
+                sail_code_map=code_map,
+                known_uuids=known_uuids,
+            )
+            run_result = await runner.run_suite(suite)
+        except Exception as exc:
+            logger.exception("StaticTestRunner.run_suite failed")
+            run_result = TestRunResult(
+                errors=1,
+                results=[TestCaseResult(
+                    test_id="static-test-runner",
+                    name="static test runner",
+                    status=TestCaseStatus.ERROR,
+                    message=f"Static test runner failed: {exc}",
+                )],
+            )
+            await self._emit_test_run_result(phase, run_result, "failed")
+            return run_result
+        run_result = self._annotate_static_run(suite, run_result)
+        if run_result.failed or run_result.errors or run_result.skipped:
+            result: ProgressResult = "failed"
+        elif run_result.deferred:
+            result = "deferred"
+        elif run_result.success:
+            result = "ok"
+        else:
+            result = "blocked"
+        await self._emit_test_run_result(phase, run_result, result)
+        return run_result
+
+    async def _emit_test_run_result(
+        self,
+        phase: str,
+        run_result: TestRunResult,
+        result: ProgressResult,
+    ) -> None:
+        """Emit terminal counts for one static test run."""
+        await self.emit_progress(
+            phase=phase,
+            current=1,
+            total=1,
+            detail=(
+                "Static test run ended: "
+                f"{run_result.passed} passed, {run_result.failed} failed, "
+                f"{run_result.errors} errored, {run_result.skipped} skipped, "
+                f"{run_result.deferred} deferred."
+            ),
+            result=result,
+        )
+
+    def build_test_suite(self) -> TestSuite | None:
+        """Rebuild the structured :class:`TestSuite` held in the session state."""
+        structured = (self.state.test_suite or {}).get("structured")
+        if not isinstance(structured, dict) or "test_cases" not in structured:
+            return None
+        try:
+            return TestSuite(**structured)
+        except ValidationError as exc:
+            logger.warning("Stored test suite is not a valid TestSuite: %s", exc)
+            return None
+
+    def acceptance_criteria_ids(self) -> list[str]:
+        """Collect the acceptance-criteria IDs for the current story.
+
+        Prefers the structured criteria of the parsed user story and falls
+        back to scanning the requirement analysis for ``AC-<n>`` tokens.
+        """
+        ids: list[str] = []
+        seen: set[str] = set()
+
+        def add(ac_id: str) -> None:
+            key = ac_id.strip().upper()
+            if key and key not in seen:
+                seen.add(key)
+                ids.append(ac_id.strip())
+
+        story = self.state.user_story if isinstance(self.state.user_story, dict) else {}
+        criteria = story.get("acceptance_criteria")
+        if isinstance(criteria, list):
+            for index, item in enumerate(criteria, start=1):
+                raw = str(item.get("id", "") or "").strip() if isinstance(item, dict) else ""
+                add(raw or f"AC-{index}")
+        if ids:
+            return ids
+
+        analysis = self.state.requirement_analysis or {}
+        text = " ".join([
+            str(analysis.get("raw", "")),
+            str(story.get("raw_text", "")),
+            str(story.get("description", "")),
+        ])
+        for match in _AC_ID_PATTERN.finditer(text):
+            add(f"AC-{int(match.group(1))}")
+        return ids
+
+    def evaluate_coverage(self) -> CoverageReport:
+        """Validate acceptance-criteria coverage of the stored suite."""
+        suite = self.build_test_suite() or TestSuite(name="(no suite)")
+        return suite.validate_coverage(self.acceptance_criteria_ids())
+
+    @staticmethod
+    def _annotate_static_run(suite: TestSuite, run_result: TestRunResult) -> TestRunResult:
+        """Mark scopes, defer live-Appian tests, and flag unreported cases.
+
+        The static runner only proves structure, so its verdict on a test that
+        needs a running Appian environment is not evidence of a pass.
+        """
+        cases = {case.id: case for case in suite.test_cases}
+        for result in run_result.results:
+            case = cases.get(result.test_id)
+            if case is None:
+                continue
+            result.name = result.name or case.name
+            result.execution_scope = case.execution_scope
+            if case.execution_scope is TestExecutionScope.LIVE_APPIAN and result.status in (
+                TestCaseStatus.PASS,
+                TestCaseStatus.SKIPPED,
+            ):
+                result.status = TestCaseStatus.DEFERRED
+                result.message = (
+                    "Needs a live Appian environment; not executed by the static runner."
+                )
+
+        reported = {result.test_id for result in run_result.results}
+        for case in suite.test_cases:
+            if case.id not in reported:
+                run_result.results.append(TestCaseResult(
+                    test_id=case.id,
+                    name=case.name,
+                    status=TestCaseStatus.ERROR,
+                    message="The test runner reported no result for this test case.",
+                    execution_scope=case.execution_scope,
+                ))
+
+        run_result.recount()
+        return run_result
+
+    @staticmethod
+    def _test_results_payload(run_result: TestRunResult) -> dict[str, Any]:
+        """Serialise a run for ``state.test_results``.
+
+        The web UI reads ``passed`` as a boolean verdict, so the verdict
+        shadows the pass count, which stays available as ``passed_count``.
+        """
+        payload = run_result.model_dump(mode="json")
+        payload["passed_count"] = run_result.passed
+        payload["passed"] = run_result.success
+        return payload
 
     # ------------------------------------------------------------------
     # User interaction helpers
@@ -594,6 +1069,49 @@ class Orchestrator:
         """Convenience wrapper for a single question."""
         await self.ask_user([question])
 
+    async def _pause_for_high_priority_questions(self, story: Any) -> None:
+        """Block generation until all high-priority questions are answered."""
+        parsed_story = (
+            story
+            if isinstance(story, UserStory)
+            else UserStory.model_validate(story)
+        )
+        model = llm_client.llm.fast_model
+        await self.emit_progress(
+            phase="llm.clarifying_questions",
+            current=0,
+            total=1,
+            detail=f"Clarifying-question LLM call started: model {model}.",
+        )
+        try:
+            questions = await StoryAnalyzer().generate_clarifying_questions(
+                parsed_story,
+                self._summarise_codebase(parsed_story),
+            )
+        except Exception as exc:
+            await self.emit_progress(
+                phase="llm.clarifying_questions",
+                current=1,
+                total=1,
+                detail=f"Clarifying-question LLM call failed: model {model}: {exc}",
+                result="failed",
+            )
+            raise
+        await self.emit_progress(
+            phase="llm.clarifying_questions",
+            current=1,
+            total=1,
+            detail=f"Clarifying-question LLM call completed: model {model}.",
+            result="ok",
+        )
+        blocking = [
+            question.question
+            for question in questions
+            if question.priority is QuestionPriority.HIGH
+        ]
+        if blocking:
+            await self.ask_user(blocking)
+
     async def _call_llm(self, prompt: str) -> str:
         """Call the primary LLM via the shared client."""
         conversation: list[dict[str, str]] = [
@@ -603,10 +1121,39 @@ class Orchestrator:
         for m in self.state.messages[-10:]:
             conversation.append({"role": m.role, "content": m.content})
 
-        response = await llm_client.llm.chat(
-            conversation,
-            model=settings.sentinel_primary_model,
-            max_tokens=settings.sentinel_max_tokens,
+        model = settings.sentinel_primary_model
+        phase = (
+            f"llm.fix_{self.state.iteration}"
+            if self.state.status is AgentStatus.FIXING
+            else f"llm.step_{self.state.current_step}"
+        )
+        await self.emit_progress(
+            phase=phase,
+            current=0,
+            total=1,
+            detail=f"LLM call started: model {model}.",
+        )
+        try:
+            response = await llm_client.llm.chat(
+                conversation,
+                model=model,
+                max_tokens=settings.sentinel_max_tokens,
+            )
+        except Exception as exc:
+            await self.emit_progress(
+                phase=phase,
+                current=1,
+                total=1,
+                detail=f"LLM call failed: model {model}: {exc}",
+                result="failed",
+            )
+            raise
+        await self.emit_progress(
+            phase=phase,
+            current=1,
+            total=1,
+            detail=f"LLM call completed: model {model}.",
+            result="ok",
         )
         return response
 
@@ -632,16 +1179,121 @@ class Orchestrator:
         """
         if not self._export_dir:
             return None
-        return write_object(self._export_dir, obj)
+        history = WorkspaceHistoryService(self._export_dir)
+        if history.head() is None:
+            history.create_baseline(
+                actor="system",
+                requirement=self._requirement_id(),
+                message="baseline",
+            )
+        output = write_object(self._export_dir, obj)
+        if output is None:
+            return None
+        history.stage(output.relative_to(self._export_dir).as_posix())
+        if history.staged_changes():
+            history.commit(
+                actor="agent",
+                requirement=self._requirement_id(),
+                message=f"Agent wrote object {obj.get('name', obj.get('uuid', ''))}",
+            )
+        return output
 
-    def _summarise_codebase(self) -> str:
-        """Return a compact string representation of the codebase map."""
+    def _requirement_id(self) -> str:
+        """Return the story identity responsible for agent mutations."""
+        story = self.state.user_story
+        if isinstance(story, dict):
+            return str(story.get("source_id") or story.get("title") or "")
+        return str(
+            getattr(story, "source_id", "")
+            or getattr(story, "title", "")
+        )
+
+    def _summarise_codebase(self, requirement: Any | None = None) -> str:
+        """Return a bounded, requirement-relevant codebase identity summary."""
         if self.state.codebase_map is None:
             return "(codebase not loaded)"
         cm = self.state.codebase_map
-        lines = [f"Objects: {len(cm.get('objects', {}))}"]
+        objects = cm.get("objects", {})
+        lines = [f"Objects: {len(objects)}"]
         for obj_type, objs in cm.get("by_type", {}).items():
             lines.append(f"  {obj_type}: {len(objs)}")
+
+        story = requirement or self.state.user_story or {}
+        if hasattr(story, "model_dump"):
+            story = story.model_dump()
+        story_text = str(story)
+        terms = {
+            term.lower()
+            for term in re.findall(r"[A-Za-z0-9_]+", story_text)
+            if len(term) >= 2
+        }
+        type_by_uuid = {
+            str(uuid): str(obj_type)
+            for obj_type, uuids in cm.get("by_type", {}).items()
+            for uuid in uuids
+        }
+        identities: list[tuple[int, str, str, str]] = []
+        names: dict[str, list[str]] = {}
+        for key, raw_obj in objects.items():
+            obj = raw_obj if isinstance(raw_obj, dict) else {}
+            uuid = str(obj.get("uuid") or key)
+            name = str(obj.get("name") or cm.get("uuid_to_name", {}).get(uuid) or "")
+            obj_type = str(
+                obj.get("object_type")
+                or obj.get("type")
+                or type_by_uuid.get(uuid)
+                or "unknown"
+            )
+            name_terms = {
+                term.lower()
+                for term in re.findall(r"[A-Za-z0-9_]+", name)
+                if len(term) >= 2
+            }
+            score = len(terms & name_terms)
+            if name and name.lower() in story_text.lower():
+                score += 10
+            names.setdefault(name.lower(), []).append(uuid)
+            if score:
+                identities.append((score, name, uuid, obj_type))
+
+        duplicate_names = {
+            name: uuids
+            for name, uuids in names.items()
+            if name and len(uuids) > 1 and any(
+                item_name.lower() == name for _, item_name, _, _ in identities
+            )
+        }
+        identities.sort(key=lambda item: (-item[0], item[1].lower(), item[2]))
+        selected: list[tuple[int, str, str, str]] = []
+        identity_lines: list[str] = []
+        identity_chars = 0
+        for identity in identities:
+            _, name, uuid, obj_type = identity
+            line = f"- {name} | {uuid} | {obj_type}"
+            if len(selected) >= 80 or identity_chars + len(line) > 8500:
+                break
+            selected.append(identity)
+            identity_lines.append(line)
+            identity_chars += len(line) + 1
+        lines.extend(["", "Relevant object identities (name | UUID | type):"])
+        lines.extend(identity_lines)
+        if duplicate_names:
+            lines.extend(["", "Ambiguous names with multiple matching UUIDs:"])
+            for name, uuids in sorted(duplicate_names.items()):
+                line = f"- {name}: {', '.join(sorted(uuids))}"
+                if sum(map(len, lines)) + len(line) > 10500:
+                    break
+                lines.append(line)
+
+        omitted = len(objects) - len(selected)
+        lines.extend([
+            "",
+            (
+                "TRUNCATION NOTE: This is a partial, relevance-selected object list. "
+                f"{len(selected)} of {len(objects)} objects are shown; {omitted} are omitted. "
+                "Do not treat this list as exhaustive."
+            ),
+        ])
         return "\n".join(lines)
 
     @staticmethod
@@ -703,3 +1355,23 @@ class Orchestrator:
         if self._on_message:
             await self._on_message(msg)
         return msg
+
+    async def emit_progress(
+        self,
+        *,
+        phase: str,
+        current: int,
+        total: int,
+        detail: str,
+        result: ProgressResult | None = None,
+    ) -> ChatMessage:
+        """Publish one event using the shared progress contract."""
+        return await emit_progress(
+            self.state,
+            self._on_message,
+            phase=phase,
+            current=current,
+            total=total,
+            detail=detail,
+            result=result,
+        )

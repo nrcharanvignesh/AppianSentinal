@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import logging
 import random
+import re
 import threading
 import uuid as _uuid
 
 logger = logging.getLogger(__name__)
+_SAFE_EXPORT_ID = re.compile(r"^[A-Za-z0-9_.{}:-]+$")
 
 
 class UuidManager:
@@ -67,7 +69,14 @@ class UuidManager:
 
         If *uuid_str* is already registered the entry is updated silently.
         """
+        if not uuid_str or not name or not obj_type:
+            raise ValueError("UUID, name, and object type are required")
+        if not _SAFE_EXPORT_ID.fullmatch(uuid_str):
+            raise ValueError(f"Unsafe Appian UUID: {uuid_str!r}")
         with self._lock:
+            previous = self._registry.get(uuid_str)
+            if previous is not None and previous != (name, obj_type):
+                raise ValueError(f"UUID {uuid_str!r} is already registered")
             self._registry[uuid_str] = (name, obj_type)
             self._name_index[name] = uuid_str
         logger.debug("Registered UUID %s -> %s (%s)", uuid_str, name, obj_type)
@@ -88,6 +97,15 @@ class UuidManager:
         with self._lock:
             entry = self._registry.get(uuid_str)
         return entry[1] if entry else None
+
+    def export_filename(self, uuid_str: str, suffix: str = ".xml") -> str:
+        """Return the UUID-backed filename used by Appian exports."""
+        with self._lock:
+            if uuid_str not in self._registry:
+                raise KeyError(f"UUID {uuid_str!r} is not registered")
+        if suffix not in {".xml", ".xsd"}:
+            raise ValueError("Export suffix must be .xml or .xsd")
+        return f"{uuid_str}{suffix}"
 
     @property
     def all_uuids(self) -> set[str]:

@@ -1,0 +1,51 @@
+appId: com.pwc.appiansentinel
+productName: AppianSentinel
+
+directories:
+  output: release/desktop
+
+files:
+  - package.json
+  # Glob, never a named allowlist: new main-process modules must enter the asar.
+  - electron/*.js
+  - "!**/*.map"
+
+asar: true
+compression: maximum
+
+# ponytail: English only; add locale codes when the renderer gains localization.
+electronLanguages:
+  - en-US
+
+extraResources:
+  - from: .next/standalone
+    to: next-standalone
+    filter:
+      - "**/*"
+      - "!**/*.map"
+      - "!**/.next/cache/**"
+      # ponytail: traced production packages do not need tests; remove if a runtime package loads fixtures.
+      - "!**/{test,tests,__tests__}/**"
+  - from: ../dist/appian-sentinel-sidecar
+    to: sidecar
+    filter:
+      - "**/*"
+
+win:
+  # rcedit embeds this during signAndEditExecutable; without it the installed
+  # app ships the default Electron atom. Regenerate: python scripts/make-icon.py
+  icon: build/icon.ico
+  signAndEditExecutable: true
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  shortcutName: Appian Sentinel
+  createDesktopShortcut: true
+  createStartMenuShortcut: false
+  runAfterFinish: false
+  include: scripts/installer.nsh

@@ -1,7 +1,6 @@
-"""Registry of valid Appian SAIL functions, components, and type casts.
+"""Compatibility lists used to build the normalized SAIL callable catalog.
 
-Built from the official Appian 26.8 documentation. Used by the SAIL validator
-to detect hallucinated (non-existent) functions.
+New analysis code must use :mod:`appian_sentinel.parser.sail_catalog`.
 """
 
 from __future__ import annotations
@@ -208,7 +207,6 @@ HALLUCINATED_FUNCTIONS = frozenset({
     "a!filter", "a!forEachItem", "a!reduce", "a!if",
     "a!concat", "a!split", "a!contains",
     "a!length", "a!append", "a!remove",
-    "a!map",  # a!map exists for creating maps but NOT for array mapping
     "a!sort", "a!distinct", "a!first", "a!last",
     "a!isEmpty", "a!isNotEmpty",
     "a!toInteger", "a!toString", "a!toDecimal",  # wrong casing — these are tointeger, tostring, etc.

@@ -17,7 +17,8 @@ from appian_sentinel.models.test_case import (
     TestRunResult,
     TestSuite,
 )
-from appian_sentinel.tester.sail_validator import SailValidator, ValidationResult
+from appian_sentinel.parser.sail_diagnostics import DiagnosticSeverity
+from appian_sentinel.tester.sail_validator import SailValidator
 
 logger = logging.getLogger(__name__)
 
@@ -138,27 +139,21 @@ class StaticTestRunner(TestRunner):
         all_warnings: list[str] = []
 
         for obj_name, code in target_objects.items():
-            # Structural validation
-            vr: ValidationResult = self._validator.validate(code)
-            for e in vr.errors:
-                all_errors.append(f"[{obj_name}] L{e.line}:C{e.column} {e.message}")
-            for w in vr.warnings:
-                all_warnings.append(f"[{obj_name}] L{w.line}:C{w.column} {w.message}")
-
-            # UUID reference validation
-            ref_errors = self._validator.validate_references(code, self._known_uuids)
-            for e in ref_errors:
-                all_errors.append(f"[{obj_name}] L{e.line}:C{e.column} {e.message}")
-
-            # Rule-input validation
             declared = self._inputs_map.get(obj_name)
-            if declared is not None:
-                ri_findings = self._validator.validate_rule_inputs(code, declared)
-                for f in ri_findings:
-                    if f.severity.value == "error":
-                        all_errors.append(f"[{obj_name}] {f.message}")
-                    else:
-                        all_warnings.append(f"[{obj_name}] {f.message}")
+            analysis = self._validator.analyze(
+                code,
+                known_uuids=self._known_uuids,
+                declared_inputs=declared,
+            )
+            for finding in analysis.diagnostics:
+                rendered = (
+                    f"[{obj_name}] {finding.code} "
+                    f"L{finding.line}:C{finding.column} {finding.message}"
+                )
+                if finding.severity == DiagnosticSeverity.ERROR:
+                    all_errors.append(rendered)
+                else:
+                    all_warnings.append(rendered)
 
         if all_errors:
             return TestCaseResult(

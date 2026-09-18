@@ -11,9 +11,7 @@ import json
 import logging
 from typing import Any
 
-from openai import AsyncOpenAI
-
-from appian_sentinel.config import settings
+from appian_sentinel.analyzer.llm_client import LLMClient, llm
 from appian_sentinel.models.test_case import (
     TestCase,
     TestCasePriority,
@@ -36,7 +34,7 @@ Appian SAIL applications.
 For each test case, produce a JSON object with:
 - "id": unique string (e.g. "TC-001")
 - "name": short descriptive name
-- "type": one of "functional", "negative", "edge", "regression", "performance"
+- "type": one of "functional", "negative", "edge", "regression", "performance", "accessibility"
 - "linked_ac": the acceptance-criteria ID this test validates (e.g. "AC-1")
 - "preconditions": list of strings
 - "steps": list of {"action": str, "input_data": dict, "expected_output": str}
@@ -55,7 +53,8 @@ Requirements:
 2. Include NEGATIVE tests for invalid inputs and boundary violations.
 3. Include EDGE cases (empty lists, null values, very long strings, etc.).
 4. Include REGRESSION tests when modifying existing objects.
-5. Map every test case to at least one acceptance criterion.
+5. Include PERFORMANCE and ACCESSIBILITY tests for applicable scenarios.
+6. Map every test case to at least one acceptance criterion.
 """
 
 _REGRESSION_SYSTEM = """\
@@ -77,12 +76,8 @@ Return a JSON array of test-case objects (same schema as above).
 class TestGenerator:
     """Generate test suites and regression tests via LLM."""
 
-    def __init__(self, client: AsyncOpenAI | None = None) -> None:
-        self._client = client or AsyncOpenAI(
-            base_url=settings.litellm_base_url,
-            api_key=settings.litellm_api_key or "not-needed",
-        )
-        self._model = settings.sentinel_primary_model
+    def __init__(self, client: LLMClient | None = None) -> None:
+        self._client = client or llm
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -90,16 +85,13 @@ class TestGenerator:
 
     async def _chat(self, system: str, user: str) -> str:
         """Run a chat completion and return the raw content."""
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
+        return await self._client.chat(
+            [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
             temperature=0.3,
-            max_tokens=settings.sentinel_max_tokens,
         )
-        return response.choices[0].message.content or ""
 
     @staticmethod
     def _clean_json(raw: str) -> str:

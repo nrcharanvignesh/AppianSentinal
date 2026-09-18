@@ -40,6 +40,10 @@ _KNOWN_DIRECTORIES = {
     "site",
     "group",
     "translationString",
+    "translationSet",
+    "portal",
+    "processModelFolder",
+    "tempoReport",
 }
 
 

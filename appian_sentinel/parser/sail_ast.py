@@ -63,6 +63,18 @@ class SourcePosition:
         return f"line {self.line}, col {self.column}"
 
 
+@dataclass(frozen=True)
+class SourceRange:
+    """A non-empty half-open source range."""
+
+    start: SourcePosition
+    end: SourcePosition
+
+    def __post_init__(self) -> None:
+        if self.end.offset <= self.start.offset:
+            raise ValueError("SourceRange must be non-empty")
+
+
 # ============================================================================
 # Token Types
 # ============================================================================
@@ -72,6 +84,7 @@ class TokenType(enum.Enum):
 
     # Literals
     STRING = "STRING"
+    QUOTED_REFERENCE = "QUOTED_REFERENCE"
     NUMBER = "NUMBER"
     NULL = "NULL"
     TRUE = "TRUE"
@@ -136,6 +149,7 @@ class Token:
     type: TokenType
     value: str
     pos: SourcePosition
+    end: Optional[SourcePosition] = None
     prefix: str = ""
     name: str = ""
 
@@ -162,6 +176,8 @@ class SailParseError:
     message: str
     pos: Optional[SourcePosition]
     severity: str = "error"
+    code: str = "SAIL001"
+    end_pos: Optional[SourcePosition] = None
 
     def __str__(self) -> str:
         loc = f" at {self.pos}" if self.pos else ""
@@ -182,6 +198,9 @@ class Node:
     """
 
     pos: Optional[SourcePosition] = dc_field(
+        default=None, repr=False, compare=False,
+    )
+    end: Optional[SourcePosition] = dc_field(
         default=None, repr=False, compare=False,
     )
 
@@ -253,6 +272,8 @@ class Arg(Node):
 
     name: Optional[str] = None
     value: Optional[Node] = None
+    quoted_name: bool = False
+    key: Optional[Node] = None
 
 
 @dataclass
@@ -342,6 +363,21 @@ class ListLiteral(Node):
     """
 
     items: list[Node] = dc_field(default_factory=list)
+
+
+@dataclass
+class DictionaryEntry(Node):
+    """A key-value entry in a dictionary literal."""
+
+    key: Optional[Node] = None
+    value: Optional[Node] = None
+
+
+@dataclass
+class DictionaryLiteral(Node):
+    """A dictionary literal such as ``{name: "Ada"}``."""
+
+    entries: list[DictionaryEntry] = dc_field(default_factory=list)
 
 
 @dataclass
@@ -607,6 +643,10 @@ class SailTokenizer:
             elif c == '"':
                 self._read_string(start)
 
+            # Appian design/type reference
+            elif c == "'":
+                self._read_quoted_reference(start)
+
             # Hash reference  #"..."
             elif c == "#" and self._peek(1) == '"':
                 self._read_hash_ref(start)
@@ -704,6 +744,7 @@ class SailTokenizer:
                 self.tokens.append(Token(TokenType.ERROR, c, start))
 
         self.tokens.append(Token(TokenType.EOF, "", self._current_pos()))
+        self._set_token_ends()
         return self.tokens
 
     # ------------------------------------------------------------------
@@ -712,6 +753,26 @@ class SailTokenizer:
 
     def _current_pos(self) -> SourcePosition:
         return SourcePosition(self.line, self.column, self.pos)
+
+    def _position_at(self, offset: int) -> SourcePosition:
+        line = self.source.count("\n", 0, offset) + 1
+        previous_newline = self.source.rfind("\n", 0, offset)
+        return SourcePosition(line, offset - previous_newline, offset)
+
+    def _set_token_ends(self) -> None:
+        """Set exact token ends after tokenization."""
+        for index, token in enumerate(self.tokens):
+            if token.type == TokenType.EOF:
+                token.end = token.pos
+                continue
+            next_offset = self.tokens[index + 1].pos.offset
+            end_offset = next_offset
+            while (
+                end_offset > token.pos.offset
+                and self.source[end_offset - 1] in " \t\r\n\ufeff"
+            ):
+                end_offset -= 1
+            token.end = self._position_at(end_offset)
 
     def _peek(self, offset: int = 0) -> str:
         idx = self.pos + offset
@@ -811,6 +872,23 @@ class SailTokenizer:
         )
         self.tokens.append(Token(TokenType.HASH_REF, content, start))
 
+    def _read_quoted_reference(self, start: SourcePosition) -> None:
+        """Read an Appian reference such as ``'type!{urn}Name'``."""
+        self._advance()
+        content_start = self.pos
+        while self.pos < len(self.source) and self._peek() != "'":
+            self._advance()
+        content = self.source[content_start : self.pos]
+        if self._peek() == "'":
+            self._advance()
+        else:
+            self.errors.append(SailParseError(
+                message="Unterminated quoted reference",
+                pos=start,
+                end_pos=self._current_pos(),
+            ))
+        self.tokens.append(Token(TokenType.QUOTED_REFERENCE, content, start))
+
     def _read_number(self, start: SourcePosition) -> None:
         """Read an integer or decimal number literal."""
         num_start = self.pos
@@ -848,15 +926,28 @@ class SailTokenizer:
         if self.pos < len(self.source) and self.source[self.pos] == "!":
             next_idx = self.pos + 1
             if next_idx < len(self.source) and (
-                self.source[next_idx].isalpha() or self.source[next_idx] == "_"
+                self.source[next_idx].isalnum() or self.source[next_idx] == "_"
             ):
                 self._advance()  # consume !
                 name_start = self.pos
-                while self.pos < len(self.source) and (
-                    self.source[self.pos].isalnum() or self.source[self.pos] == "_"
-                ):
-                    self._advance()
-                name = self.source[name_start : self.pos]
+                if word.casefold() == "recordtype":
+                    while (
+                        self.pos < len(self.source)
+                        and self.source[self.pos] not in ".,()[]{}:+-*/&=<>\r\n"
+                    ):
+                        self._advance()
+                    name = self.source[name_start : self.pos].rstrip()
+                    trailing = self.pos - name_start - len(name)
+                    if trailing:
+                        self.pos -= trailing
+                        self.column -= trailing
+                else:
+                    while self.pos < len(self.source) and (
+                        self.source[self.pos].isalnum()
+                        or self.source[self.pos] == "_"
+                    ):
+                        self._advance()
+                    name = self.source[name_start : self.pos]
                 self.tokens.append(
                     Token(
                         TokenType.PREFIXED_IDENTIFIER,
@@ -942,6 +1033,9 @@ class SailParser:
 
         node = self._parse_expression()
 
+        if self._match(TokenType.COMMA) and self._peek().type == TokenType.EOF:
+            self._advance()
+
         if self._current().type != TokenType.EOF:
             self._add_error(
                 f"Unexpected token after expression: "
@@ -991,10 +1085,19 @@ class SailParser:
         return self._current().type in types
 
     def _add_error(
-        self, message: str, pos: Optional[SourcePosition] = None,
+        self,
+        message: str,
+        pos: Optional[SourcePosition] = None,
+        code: str = "SAIL001",
+        end_pos: Optional[SourcePosition] = None,
     ) -> None:
+        token = self._current()
+        start = pos or token.pos
+        end = end_pos or token.end
+        if end is None or end.offset <= start.offset:
+            end = SourcePosition(start.line, start.column + 1, start.offset + 1)
         self.errors.append(
-            SailParseError(message=message, pos=pos or self._current().pos),
+            SailParseError(message=message, pos=start, code=code, end_pos=end),
         )
 
     # ------------------------------------------------------------------
@@ -1011,7 +1114,9 @@ class SailParser:
         while self._match(TokenType.EQUAL, TokenType.NOT_EQUAL):
             op = self._advance()
             right = self._parse_comparison()
-            left = BinaryOp(op=op.value, left=left, right=right, pos=op.pos)
+            left = BinaryOp(
+                op=op.value, left=left, right=right, pos=left.pos, end=right.end,
+            )
         return left
 
     def _parse_comparison(self) -> Node:
@@ -1025,7 +1130,9 @@ class SailParser:
         ):
             op = self._advance()
             right = self._parse_additive()
-            left = BinaryOp(op=op.value, left=left, right=right, pos=op.pos)
+            left = BinaryOp(
+                op=op.value, left=left, right=right, pos=left.pos, end=right.end,
+            )
         return left
 
     def _parse_additive(self) -> Node:
@@ -1034,7 +1141,9 @@ class SailParser:
         while self._match(TokenType.PLUS, TokenType.MINUS, TokenType.AMPERSAND):
             op = self._advance()
             right = self._parse_multiplicative()
-            left = BinaryOp(op=op.value, left=left, right=right, pos=op.pos)
+            left = BinaryOp(
+                op=op.value, left=left, right=right, pos=left.pos, end=right.end,
+            )
         return left
 
     def _parse_multiplicative(self) -> Node:
@@ -1043,7 +1152,9 @@ class SailParser:
         while self._match(TokenType.STAR, TokenType.SLASH):
             op = self._advance()
             right = self._parse_unary()
-            left = BinaryOp(op=op.value, left=left, right=right, pos=op.pos)
+            left = BinaryOp(
+                op=op.value, left=left, right=right, pos=left.pos, end=right.end,
+            )
         return left
 
     def _parse_unary(self) -> Node:
@@ -1051,7 +1162,7 @@ class SailParser:
         if self._match(TokenType.MINUS):
             op = self._advance()
             operand = self._parse_unary()  # right-recursive
-            return UnaryOp(op="-", operand=operand, pos=op.pos)
+            return UnaryOp(op="-", operand=operand, pos=op.pos, end=operand.end)
         return self._parse_postfix()
 
     def _parse_postfix(self) -> Node:
@@ -1059,28 +1170,31 @@ class SailParser:
         node = self._parse_primary()
         while True:
             if self._match(TokenType.DOT):
-                dot = self._advance()
+                self._advance()
                 if self._match(TokenType.IDENTIFIER):
                     field = self._advance()
                     node = DotAccess(
-                        target=node, field=field.value, pos=dot.pos,
+                        target=node, field=field.value, pos=node.pos, end=field.end,
                     )
                 elif self._match(TokenType.PREFIXED_IDENTIFIER):
                     # Edge case -- the tokenizer may have consumed
                     # ``fields!something`` as a prefixed id after a dot.
                     field = self._advance()
                     node = DotAccess(
-                        target=node, field=field.value, pos=dot.pos,
+                        target=node, field=field.value, pos=node.pos, end=field.end,
                     )
                 else:
                     self._add_error("Expected field name after '.'")
                     break
             elif self._match(TokenType.LBRACKET):
-                bracket = self._advance()
+                self._advance()
                 index_expr = self._parse_expression()
-                self._expect(TokenType.RBRACKET, "bracket access")
+                close = self._expect(TokenType.RBRACKET, "bracket access")
                 node = BracketAccess(
-                    target=node, index=index_expr, pos=bracket.pos,
+                    target=node,
+                    index=index_expr,
+                    pos=node.pos,
+                    end=close.end or index_expr.end,
                 )
             else:
                 break
@@ -1098,11 +1212,24 @@ class SailParser:
                 value: Union[int, float] = float(tok.value)
             else:
                 value = int(tok.value)
-            return NumberLiteral(value=value, pos=tok.pos)
+            return NumberLiteral(value=value, pos=tok.pos, end=tok.end)
 
         if tok.type == TokenType.STRING:
             self._advance()
-            return StringLiteral(value=tok.value, pos=tok.pos)
+            return StringLiteral(value=tok.value, pos=tok.pos, end=tok.end)
+
+        if tok.type == TokenType.QUOTED_REFERENCE:
+            self._advance()
+            name = f"'{tok.value}'"
+            if self._match(TokenType.LPAREN):
+                args = self._parse_args()
+                return FunctionCall(
+                    name=name,
+                    args=args,
+                    pos=tok.pos,
+                    end=self._previous_end(tok),
+                )
+            return Identifier(name=name, pos=tok.pos, end=tok.end)
 
         if tok.type == TokenType.TRUE:
             self._advance()
@@ -1110,7 +1237,7 @@ class SailParser:
                 args = self._parse_args()
                 if args:
                     self._add_error("true() does not accept arguments", tok.pos)
-            return BoolLiteral(value=True, pos=tok.pos)
+            return BoolLiteral(value=True, pos=tok.pos, end=self._previous_end(tok))
 
         if tok.type == TokenType.FALSE:
             self._advance()
@@ -1118,7 +1245,7 @@ class SailParser:
                 args = self._parse_args()
                 if args:
                     self._add_error("false() does not accept arguments", tok.pos)
-            return BoolLiteral(value=False, pos=tok.pos)
+            return BoolLiteral(value=False, pos=tok.pos, end=self._previous_end(tok))
 
         if tok.type == TokenType.NULL:
             self._advance()
@@ -1126,7 +1253,7 @@ class SailParser:
                 args = self._parse_args()
                 if args:
                     self._add_error("null() does not accept arguments", tok.pos)
-            return NullLiteral(pos=tok.pos)
+            return NullLiteral(pos=tok.pos, end=self._previous_end(tok))
 
         # -- Identifier (plain function call or bare identifier) -------
 
@@ -1153,7 +1280,8 @@ class SailParser:
         if tok.type == TokenType.LPAREN:
             self._advance()
             expr = self._parse_expression()
-            self._expect(TokenType.RPAREN, "parenthesised expression")
+            close = self._expect(TokenType.RPAREN, "parenthesised expression")
+            expr.end = close.end or expr.end
             return expr
 
         # -- Error recovery --------------------------------------------
@@ -1164,6 +1292,7 @@ class SailParser:
         self._advance()
         return ErrorNode(
             message=f"Unexpected: {tok.value}", tokens=[tok], pos=tok.pos,
+            end=tok.end,
         )
 
     # ------------------------------------------------------------------
@@ -1187,10 +1316,13 @@ class SailParser:
                     type_name=name,
                     expression=args[0].value,
                     pos=tok.pos,
+                    end=self._previous_end(tok),
                 )
-            return FunctionCall(name=name, args=args, pos=tok.pos)
+            return FunctionCall(
+                name=name, args=args, pos=tok.pos, end=self._previous_end(tok),
+            )
 
-        return Identifier(name=name, pos=tok.pos)
+        return Identifier(name=name, pos=tok.pos, end=tok.end)
 
     def _parse_prefixed(self) -> Node:
         """Parse a prefixed identifier: ``a!comp(...)``, ``ri!var``, etc."""
@@ -1202,19 +1334,24 @@ class SailParser:
         if prefix in COMPONENT_PREFIXES:
             if self._match(TokenType.LPAREN):
                 args = self._parse_args()
-                return ComponentCall(name=name, args=args, pos=tok.pos)
+                return ComponentCall(
+                    name=name, args=args, pos=tok.pos, end=self._previous_end(tok),
+                )
             # a!something without parens -- treat as domain var
-            return DomainVar(domain=prefix, name=name, pos=tok.pos)
+            return DomainVar(domain=prefix, name=name, pos=tok.pos, end=tok.end)
 
         # Other domains: ri!, local!, fv!, rule!, cons!, ...
         if self._match(TokenType.LPAREN):
             # Some domains allow callable syntax: rule!myRule()
             args = self._parse_args()
             return FunctionCall(
-                name=f"{prefix}!{name}", args=args, pos=tok.pos,
+                name=f"{prefix}!{name}",
+                args=args,
+                pos=tok.pos,
+                end=self._previous_end(tok),
             )
 
-        return DomainVar(domain=prefix, name=name, pos=tok.pos)
+        return DomainVar(domain=prefix, name=name, pos=tok.pos, end=tok.end)
 
     def _parse_hash_ref(self) -> Node:
         """Parse ``#"..."`` optionally followed by ``(args)``."""
@@ -1225,21 +1362,62 @@ class SailParser:
         if self._match(TokenType.LPAREN):
             args = self._parse_args()
             if is_system:
-                return SystemCall(name=content, args=args, pos=tok.pos)
-            return UuidCall(uuid=content, args=args, pos=tok.pos)
+                return SystemCall(
+                    name=content, args=args, pos=tok.pos, end=self._previous_end(tok),
+                )
+            return UuidCall(
+                uuid=content, args=args, pos=tok.pos, end=self._previous_end(tok),
+            )
 
         # Reference without a call (used as a value)
         if is_system:
-            return SystemCall(name=content, args=[], pos=tok.pos)
-        return UuidCall(uuid=content, args=[], pos=tok.pos)
+            return SystemCall(name=content, args=[], pos=tok.pos, end=tok.end)
+        return UuidCall(uuid=content, args=[], pos=tok.pos, end=tok.end)
 
     def _parse_list(self) -> Node:
-        """Parse ``{item, item, ...}``."""
+        """Parse a list or dictionary literal."""
         brace = self._advance()  # LBRACE
         items: list[Node] = []
+        entries: list[DictionaryEntry] = []
+        is_dictionary = False
 
         while not self._match(TokenType.RBRACE, TokenType.EOF):
-            items.append(self._parse_expression())
+            if self._match(TokenType.COMMA):
+                self._add_error(
+                    "Empty item in literal", code="SAIL004",
+                )
+                self._advance()
+                continue
+
+            key_or_item = self._parse_expression()
+            if self._match(TokenType.COLON):
+                is_dictionary = True
+                self._advance()
+                if self._match(TokenType.COMMA, TokenType.RBRACE, TokenType.EOF):
+                    self._add_error(
+                        "Missing dictionary value", code="SAIL005",
+                    )
+                    value: Node = ErrorNode(
+                        message="Missing dictionary value",
+                        pos=self._current().pos,
+                        end=self._current().end,
+                    )
+                else:
+                    value = self._parse_expression()
+                entries.append(DictionaryEntry(
+                    key=key_or_item,
+                    value=value,
+                    pos=key_or_item.pos,
+                    end=value.end,
+                ))
+            elif is_dictionary:
+                self._add_error(
+                    "Dictionary item is missing ':'", code="SAIL006",
+                    pos=key_or_item.pos,
+                    end_pos=key_or_item.end,
+                )
+            else:
+                items.append(key_or_item)
 
             if self._match(TokenType.COMMA):
                 self._advance()
@@ -1247,8 +1425,18 @@ class SailParser:
                 self._add_error("Expected ',' or '}' in list literal")
                 break
 
-        self._expect(TokenType.RBRACE, "list literal")
-        return ListLiteral(items=items, pos=brace.pos)
+        close = self._expect(TokenType.RBRACE, "literal")
+        end = close.end or self._previous_end(brace)
+        if is_dictionary:
+            if items:
+                self._add_error(
+                    "Cannot mix list and dictionary items",
+                    code="SAIL007",
+                    pos=items[0].pos,
+                    end_pos=items[-1].end,
+                )
+            return DictionaryLiteral(entries=entries, pos=brace.pos, end=end)
+        return ListLiteral(items=items, pos=brace.pos, end=end)
 
     # ------------------------------------------------------------------
     # Argument list parsing
@@ -1267,6 +1455,12 @@ class SailParser:
         args: list[Arg] = []
 
         while not self._match(TokenType.RPAREN, TokenType.EOF):
+            if self._match(TokenType.COMMA):
+                comma = self._advance()
+                self._add_error(
+                    "Empty argument", comma.pos, "SAIL003", comma.end,
+                )
+                continue
             arg = self._parse_single_arg()
             if arg is not None:
                 args.append(arg)
@@ -1282,18 +1476,33 @@ class SailParser:
         self._expect(TokenType.RPAREN, "argument list")
         return args
 
+    def _previous_end(self, fallback: Token) -> Optional[SourcePosition]:
+        if self.pos > 0:
+            return self.tokens[self.pos - 1].end
+        return fallback.end
+
     def _parse_single_arg(self) -> Optional[Arg]:
         """Parse one argument inside a call's parentheses."""
         start = self._current().pos
         tok = self._current()
 
-        # Named argument:  identifier COLON expression
-        if tok.type == TokenType.IDENTIFIER and self._peek().type == TokenType.COLON:
+        # Named argument: identifier or quoted key, COLON, expression
+        if (
+            tok.type in (TokenType.IDENTIFIER, TokenType.STRING)
+            and self._peek().type == TokenType.COLON
+        ):
             name = tok.value
+            quoted_name = tok.type == TokenType.STRING
             self._advance()  # identifier
             self._advance()  # colon
             value = self._parse_expression()
-            return Arg(name=name, value=value, pos=start)
+            return Arg(
+                name=name,
+                value=value,
+                quoted_name=quoted_name,
+                pos=start,
+                end=value.end,
+            )
 
         # Variable binding:  domain!var COLON expression
         if (
@@ -1306,13 +1515,23 @@ class SailParser:
             self._advance()  # colon
             value = self._parse_expression()
             binding = VariableBinding(
-                name=full_name, expression=value, pos=start,
+                name=full_name, expression=value, pos=start, end=value.end,
             )
-            return Arg(name=None, value=binding, pos=start)
+            return Arg(name=None, value=binding, pos=start, end=value.end)
 
         # Positional argument
         value = self._parse_expression()
-        return Arg(name=None, value=value, pos=start)
+        if self._match(TokenType.COLON):
+            self._advance()
+            mapped_value = self._parse_expression()
+            return Arg(
+                name=None,
+                value=mapped_value,
+                key=value,
+                pos=start,
+                end=mapped_value.end,
+            )
+        return Arg(name=None, value=value, pos=start, end=value.end)
 
     # ------------------------------------------------------------------
     # Error recovery
@@ -1381,6 +1600,8 @@ class NodeVisitor:
         if isinstance(node, (FunctionCall, ComponentCall, UuidCall, SystemCall)):
             yield from node.args
         elif isinstance(node, Arg):
+            if node.key is not None:
+                yield node.key
             if node.value is not None:
                 yield node.value
         elif isinstance(node, DotAccess):
@@ -1401,6 +1622,13 @@ class NodeVisitor:
                 yield node.operand
         elif isinstance(node, ListLiteral):
             yield from node.items
+        elif isinstance(node, DictionaryLiteral):
+            yield from node.entries
+        elif isinstance(node, DictionaryEntry):
+            if node.key is not None:
+                yield node.key
+            if node.value is not None:
+                yield node.value
         elif isinstance(node, VariableBinding):
             if node.expression is not None:
                 yield node.expression
@@ -1518,6 +1746,12 @@ class _PrettyPrinter:
             return f"{left} {node.op} {right}"
         if isinstance(node, ListLiteral):
             return self._fmt_list(node, indent)
+        if isinstance(node, DictionaryLiteral):
+            content = ", ".join(
+                f"{self._fmt(entry.key, indent)}: {self._fmt(entry.value, indent)}"
+                for entry in node.entries
+            )
+            return "{" + content + "}"
         if isinstance(node, VariableBinding):
             return f"{node.name}: {self._fmt(node.expression, indent)}"
         if isinstance(node, TypeCast):
@@ -1527,8 +1761,15 @@ class _PrettyPrinter:
             return f"recordType!{node.record_type}.{path}"
         if isinstance(node, Arg):
             val = self._fmt(node.value, indent)
+            if node.key is not None:
+                return f"{self._fmt(node.key, indent)}: {val}"
             if node.name is not None:
-                return f"{node.name}: {val}"
+                name = (
+                    '"' + node.name.replace('"', '""') + '"'
+                    if node.quoted_name
+                    else node.name
+                )
+                return f"{name}: {val}"
             return val
 
         # -- Calls -----------------------------------------------------

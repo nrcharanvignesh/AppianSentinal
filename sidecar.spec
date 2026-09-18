@@ -12,7 +12,15 @@ electron-builder (see desktop/package.json -> build.extraResources).
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-datas = [("Appian Sentinel.txt", ".")]
+datas = [
+    ("Appian Sentinel.txt", "."),
+    ("appian.skill", "."),
+    ("GenAI Documentation.xlsx", "."),
+    # main.py mounts StaticFiles and Jinja2Templates at import time; without
+    # these the frozen exe aborts on startup before it can bind a port.
+    ("appian_sentinel/web/static", "appian_sentinel/web/static"),
+    ("appian_sentinel/web/templates", "appian_sentinel/web/templates"),
+]
 binaries = []
 hiddenimports = []
 
@@ -40,6 +48,32 @@ hiddenimports += [
     "uvicorn.lifespan.on",
 ]
 
+# The build interpreter is a shared global Python that also carries Qt, the
+# scientific stack, torch and dev tooling. None of it is imported by
+# appian_sentinel, but PyInstaller's hook chain collects it anyway: Qt aborts
+# the build outright and torch/scipy add gigabytes. Excluding by name is the
+# documented remedy.
+# ponytail: name-based excludes; build the sidecar in a dedicated minimal venv
+# if this list starts needing maintenance.
+_EXCLUDES = [
+    # GUI toolkits (two Qt bindings present -> hard build abort)
+    "PyQt5", "PyQt6", "PySide2", "PySide6", "shiboken2", "shiboken6",
+    "tkinter", "_tkinter", "wx", "kivy", "pygame",
+    # scientific / ML stack
+    "torch", "torchvision", "torchaudio", "tensorflow", "keras",
+    "numpy", "pandas", "scipy", "sklearn", "matplotlib", "seaborn",
+    "numba", "llvmlite", "sympy", "polars", "pyarrow", "h5py",
+    "transformers", "tokenizers", "safetensors", "onnx", "onnxruntime",
+    "cv2", "PIL", "skimage",
+    # notebooks / interactive
+    "IPython", "ipykernel", "jupyter", "jupyter_client", "jupyter_core",
+    "notebook", "nbformat", "nbconvert", "zmq", "traitlets",
+    # dev + docs tooling
+    "pytest", "_pytest", "py", "sphinx", "docutils", "babel",
+    "black", "blib2to3", "yapf", "yapf_third_party", "pylint", "astroid",
+    "jedi", "parso", "isort", "mypy", "ruff",
+]
+
 a = Analysis(
     ["appian_sentinel/sidecar.py"],
     pathex=[],
@@ -48,7 +82,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    excludes=_EXCLUDES,
     noarchive=False,
 )
 

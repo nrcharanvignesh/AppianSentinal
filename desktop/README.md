@@ -66,9 +66,20 @@ by `electron/main.js` in production.
 
 ## The Appian MCP server
 
-The same engine is exposed as an MCP server (`appian-sentinel-mcp`) with tools:
-`analyze_appian_zip`, `search_objects`, `get_object`, `read_ado_work_item`,
-`apply_object_change`, `generate_patch_zip`.
+The same engine is exposed as an MCP server (`appian-sentinel-mcp`). It registers
+27 tools; `appian_sentinel/mcp_server/server.py` is the authoritative list.
+
+- Analysis: `analyze_appian_zip`, `search_objects`, `get_object`, `list_objects`,
+  `resolve_object`, `get_dependency_graph`, `workspace_status`
+- Code intelligence: `inspect_sail`, `validate_sail`, `validate_object`,
+  `validate_workspace`
+- Requirements: `read_ado_work_item`, `normalize_requirement`
+- Changes: `apply_object_change`, `apply_sail_edit`, `bulk_add_tests`
+- History: `history_log`, `history_diff`, `history_commit`, `history_restore`
+- Tests: `run_static_tests`, `validate_test_coverage`
+- Generation: `generate_sail`, `generate_test_suite`, `generate_solution_design`
+  (these require a configured LLM and fail loudly without one)
+- Packaging: `generate_patch_zip`, `generate_full_zip`
 
 Register it with any MCP client (Claude Desktop / Cursor), e.g.:
 

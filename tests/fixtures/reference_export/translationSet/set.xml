@@ -1,0 +1,13 @@
+<translationSetHaul xmlns:a="http://www.appian.com/ae/types/2009">
+  <versionUuid>set-version</versionUuid>
+  <translationSet a:uuid="66666666-6666-4666-8666-666666666666" name="Reference Translations">
+    <a:description>Translation set fixture</a:description>
+    <a:enabledLocales>
+      <a:localeLanguageTag>es</a:localeLanguageTag>
+      <a:localeLanguageTag>en-US</a:localeLanguageTag>
+    </a:enabledLocales>
+    <a:defaultLocale>
+      <a:localeLanguageTag>en-US</a:localeLanguageTag>
+    </a:defaultLocale>
+  </translationSet>
+</translationSetHaul>
