@@ -471,6 +471,7 @@ function createWindow(uiUrl) {
   });
   mainWindow = win;
   applyExternalLinkPolicy(win);
+  applyDownloadPolicy(win);
   win.once('ready-to-show', () => {
     closeSplash();
     if (!win.isDestroyed()) win.show();
@@ -481,6 +482,37 @@ function createWindow(uiUrl) {
     if (mainWindow === win) mainWindow = null;
   });
   void win.loadURL(uiUrl);
+}
+
+function uniqueDownloadPath(filename) {
+  const parsed = path.parse(filename || 'download.zip');
+  let candidate = path.join(workspacePaths.downloads, parsed.base);
+  let counter = 1;
+  while (existsSync(candidate)) {
+    candidate = path.join(
+      workspacePaths.downloads,
+      `${parsed.name}-${counter}${parsed.ext}`
+    );
+    counter += 1;
+  }
+  return candidate;
+}
+
+function applyDownloadPolicy(win) {
+  // Without an explicit save path Electron opens a modal Save dialog, which
+  // stalls the ZIP download behind native UI. Write into the workspace
+  // downloads folder instead and record where it landed.
+  win.webContents.session.on('will-download', (event, item) => {
+    const target = uniqueDownloadPath(item.getFilename());
+    item.setSavePath(target);
+    item.once('done', (_event, state) => {
+      if (state === 'completed') {
+        log('INFO', `Saved download to ${target}`);
+      } else {
+        log('WARN', `Download ${state}: ${target}`);
+      }
+    });
+  });
 }
 
 function killChildTree(child) {

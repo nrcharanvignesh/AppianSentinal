@@ -24,6 +24,7 @@ function resolveWorkspacePaths() {
     config: path.join(workspace, 'config'),
     cache: path.join(workspace, 'cache'),
     tmp: path.join(workspace, 'tmp'),
+    downloads: path.join(workspace, 'downloads'),
     electron: path.join(workspace, 'electron'),
   });
 }

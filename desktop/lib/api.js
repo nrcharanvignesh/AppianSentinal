@@ -58,7 +58,8 @@ async function download(kind) {
   link.download = disposition.match(/filename="?([^"]+)"?/)?.[1] || `${kind}.zip`;
   link.href = url;
   link.click();
-  URL.revokeObjectURL(url);
+  // Revoking in the same tick can cancel the download before it starts.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export const api = {
