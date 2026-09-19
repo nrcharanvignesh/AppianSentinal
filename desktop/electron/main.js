@@ -10,11 +10,11 @@ const { applyExternalLinkPolicy } = require('./external-links');
 const { resolveWorkspacePaths } = require('./workspace-paths');
 const { startWindowsJobOwner } = require('./windows-job');
 
-// Testing Toolkit already owns 7842/8888 on developer machines. Sentinel keeps
-// its own pair so both desktops can run at once; ensurePortAvailable refuses to
-// touch a listener it does not own, so a collision would otherwise just block boot.
-const AGENT_PORT = Number(process.env.SENTINEL_AGENT_PORT || 7851);
-const UI_PORT = Number(process.env.SENTINEL_UI_PORT || 8871);
+// Defaults match the Testing Toolkit process shape. Override with
+// SENTINEL_AGENT_PORT / SENTINEL_UI_PORT if another local app already binds them.
+// ensurePortAvailable refuses to kill a listener this install does not own.
+const AGENT_PORT = Number(process.env.SENTINEL_AGENT_PORT || 7842);
+const UI_PORT = Number(process.env.SENTINEL_UI_PORT || 8888);
 const HEALTH_TIMEOUT_MS = 120000;
 const POLL_MS = 250;
 const SPLASH_TIMEOUT_MS = 60000;
@@ -482,10 +482,13 @@ function showStartupError(error) {
 }
 
 async function bootDesktop() {
-  const jobOwnerReady = startWindowsJobOwner(workspacePaths.electron);
-  void jobOwnerReady.catch(() => undefined);
   openSplash();
-  await jobOwnerReady;
+  try {
+    await startWindowsJobOwner(workspacePaths.electron);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    log('WARN', `Windows Job Object unavailable; continuing without it: ${detail}`);
+  }
   const [uiUrl] = await Promise.all([startUiServer(), startAgent()]);
   createWindow(uiUrl);
 }

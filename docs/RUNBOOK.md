@@ -36,7 +36,7 @@ set SENTINEL_SMOKE_SIDECAR_EXE=dist\appian-sentinel-sidecar\appian-sentinel-side
 python tools/smoke_sidecar.py
 ```
 
-Default bind used by the smoke script is `127.0.0.1:7851`.
+Default bind used by the smoke script is `127.0.0.1:7842`.
 
 ## 3. Next.js renderer and Electron installer
 
@@ -106,9 +106,9 @@ Pass that path as Playwright `executable_path`. Prefer
 
 ## Ports
 
-- Sidecar/agent: 7851 (`SENTINEL_AGENT_PORT`)
-- UI: 8871 (`SENTINEL_UI_PORT`)
-- 7842 and 8888 are owned by Testing Toolkit; do not reuse them.
+- Sidecar/agent: 7842 (`SENTINEL_AGENT_PORT`)
+- UI: 8888 (`SENTINEL_UI_PORT`)
+- If Testing Toolkit is bound on the same pair, set SENTINEL_AGENT_PORT and SENTINEL_UI_PORT.
 - 8899 is held by a local Java process on the developer machine; do not bind it.
 
 ## Parallel lane integration

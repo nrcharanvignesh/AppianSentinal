@@ -17,6 +17,8 @@ and test-runner overlays count as a visual failure.
 
 Graded evidence:
 
+- `desktop/test-results/workbench-dark-1440x900.png`
+- `desktop/test-results/workbench-light-1440x900.png`
 - `desktop/test-results/workbench-loaded-1440x900.png`
 - `desktop/test-results/workbench-loaded-1024x640.png`
 - `desktop/test-results/workbench-empty-1440x900.png`
@@ -57,7 +59,7 @@ Graded evidence:
 ### Color - 4 of 4
 
 - [x] CL1 PASS - Navy and Appian blue identify the application bar, active navigation, primary controls, and status bar.
-- [x] CL2 PASS - Main content uses white and light-gray surfaces with dark text; no large saturated content background competes with the editor.
+- [x] CL2 PASS - MUI dark mode is the default; the persistent light mode uses white and light-gray surfaces. Both keep editor contrast restrained.
 - [x] CL3 PASS - Error red is limited to errors and invalid source, while blue indicates selection, action, or progress.
 - [x] CL4 PASS - Offline status is red in both the application bar indicator and assistant heading; it is not shown in success green.
 

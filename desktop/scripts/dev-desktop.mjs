@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DESKTOP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number(process.env.SENTINEL_UI_PORT || 8871);
+const PORT = Number(process.env.SENTINEL_UI_PORT || 8888);
 
 function waitForPort(port, timeoutMs = 120000) {
   const deadline = Date.now() + timeoutMs;

@@ -11,6 +11,7 @@ from appian_sentinel.models.codebase import (
     CodebaseMap,
 )
 from appian_sentinel.parser.codebase_map import OBJECT_SCAN_PATTERNS, build_codebase_map
+from appian_sentinel.testing.synthetic_export import generate_synthetic_export
 
 FIXTURE_EXPORT = Path(__file__).parent / "fixtures" / "reference_export"
 REFERENCE_EXPORT = Path(__file__).parents[1] / "appian_export"
@@ -108,6 +109,22 @@ def test_uuid_ambiguity_preserves_all_source_objects() -> None:
         codebase.get_object("duplicate-uuid")
 
 
+def test_synthetic_scale_every_uuid_and_unique_name_resolves(tmp_path: Path) -> None:
+    generated = generate_synthetic_export(tmp_path / "synthetic", 300, seed=7)
+    codebase = build_codebase_map(generated.root)
+
+    assert not codebase.parse_failures
+    assert len(codebase.objects) == 300
+    for uuid, obj in codebase.objects.items():
+        assert codebase.get_object(uuid) is obj
+    for name, uuids in codebase.name_to_uuids.items():
+        if len(uuids) == 1:
+            assert codebase.resolve_uuid(name) == uuids[0]
+        else:
+            with pytest.raises(AmbiguousObjectNameError):
+                codebase.resolve_uuid(name)
+
+
 @pytest.mark.skipif(not REFERENCE_EXPORT.exists(), reason="full reference export is not available")
 def test_optional_full_reference_inventory_reconciles() -> None:
     codebase = build_codebase_map(REFERENCE_EXPORT)
@@ -115,6 +132,8 @@ def test_optional_full_reference_inventory_reconciles() -> None:
     assert codebase.scanned_files == 2624
     assert not codebase.parse_failures
     assert len(codebase.objects) == 2624
+    for uuid, obj in codebase.objects.items():
+        assert codebase.get_object(uuid) is obj
     assert codebase.summarise().counts_by_type == {
         "connected_system": 4,
         "constant": 652,

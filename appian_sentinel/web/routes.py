@@ -26,7 +26,7 @@ from appian_sentinel.generator import xml_writer
 from appian_sentinel.generator.object_writer import write_object
 from appian_sentinel.integrations import ado_client
 from appian_sentinel.models.workspace import Revision
-from appian_sentinel.packager import patch_builder
+from appian_sentinel.packager import patch_builder, zip_builder
 from appian_sentinel.parser import codebase_map as codebase_map_mod
 from appian_sentinel.parser.sail_diagnostics import analyze_sail
 from appian_sentinel.parser.xml_parser import parse_appian_xml
@@ -816,6 +816,53 @@ async def get_test_results(request: Request) -> JSONResponse:
     if state.test_results is None:
         return JSONResponse({"status": "no_results"})
     return JSONResponse(state.test_results)
+
+
+@router.post("/package")
+async def package_full_zip(request: Request) -> JSONResponse:
+    """Rebuild a full Appian ZIP from the loaded export without waiting for the agent."""
+    session = _get_session(request)
+    state: AgentState = session["state"]
+    orchestrator: Orchestrator = session["orchestrator"]
+    if not state.export_dir:
+        raise HTTPException(status_code=404, detail="No export loaded.")
+    workspace = settings.sentinel_workspace.resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    zip_path = workspace / f"rebuild_{state.session_id}.zip"
+    await _emit_route_progress(
+        orchestrator,
+        phase="packaging.full_zip",
+        current=0,
+        total=1,
+        detail="Full ZIP rebuild started.",
+    )
+    try:
+        output = await asyncio.to_thread(
+            zip_builder.build_appian_zip,
+            Path(state.export_dir),
+            zip_path,
+            list(state.generated_objects or []),
+        )
+    except Exception as exc:
+        await _emit_route_progress(
+            orchestrator,
+            phase="packaging.full_zip",
+            current=1,
+            total=1,
+            detail=f"Full ZIP rebuild failed: {exc}",
+            result="failed",
+        )
+        raise HTTPException(status_code=500, detail=f"ZIP rebuild failed: {exc}") from exc
+    state.output_zip_path = str(output)
+    await _emit_route_progress(
+        orchestrator,
+        phase="packaging.full_zip",
+        current=1,
+        total=1,
+        detail=f"Full ZIP rebuilt: {output.name}.",
+        result="ok",
+    )
+    return JSONResponse({"status": "ok", "filename": output.name, "has_output_zip": True})
 
 
 @router.get("/download")

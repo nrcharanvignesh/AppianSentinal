@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from appian_sentinel.agent.orchestrator import Orchestrator
 from appian_sentinel.agent.state import AgentState
+from appian_sentinel.config import settings
 from appian_sentinel.models.user_story import (
     ClarifyingQuestion,
     QuestionPriority,
@@ -171,3 +172,19 @@ async def test_high_priority_questions_pause_before_generation(
     await orchestrator._pause_for_high_priority_questions(UserStory(title="Story"))
 
     ask_user.assert_awaited_once_with(["Blocking?"])
+
+
+def test_package_rebuilds_zip_from_loaded_export(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "sentinel_workspace", tmp_path / "ws")
+    (tmp_path / "ws").mkdir()
+    _load_session(tmp_path)
+    packed = client.post("/api/package?session_id=desktop")
+    assert packed.status_code == 200, packed.text
+    assert packed.json()["has_output_zip"] is True
+    downloaded = client.get("/api/download?session_id=desktop")
+    assert downloaded.status_code == 200
+    assert downloaded.content[:2] == b"PK"

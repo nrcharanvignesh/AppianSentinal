@@ -15,8 +15,8 @@ body {
 
 body {
   overflow: hidden;
-  color: #24292f;
-  background: #f4f6f8;
+  color: var(--text-ui);
+  background: var(--canvas);
   font-family: "Segoe UI", Arial, sans-serif;
   font-size: 13px;
   line-height: 1.45;
@@ -38,15 +38,15 @@ ul {
 }
 
 ::-webkit-scrollbar-track {
-  background: #eef1f4;
+  background: var(--surface-muted);
 }
 
 ::-webkit-scrollbar-thumb {
-  border: 2px solid #eef1f4;
+  border: 2px solid var(--surface-muted);
   border-radius: 5px;
-  background: #b8c1ca;
+  background: var(--border-strong);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #93a0ab;
+  background: var(--text-muted-ui);
 }

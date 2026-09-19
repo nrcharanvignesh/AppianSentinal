@@ -8,6 +8,8 @@ const SCREENSHOT_1440 = path.join(SCREENSHOT_DIR, 'workbench-loaded-1440x900.png
 const SCREENSHOT_EMPTY = path.join(SCREENSHOT_DIR, 'workbench-empty-1440x900.png');
 const SCREENSHOT_LOADING = path.join(SCREENSHOT_DIR, 'workbench-loading-1440x900.png');
 const SCREENSHOT_ERROR = path.join(SCREENSHOT_DIR, 'workbench-error-1440x900.png');
+const SCREENSHOT_DARK = path.join(SCREENSHOT_DIR, 'workbench-dark-1440x900.png');
+const SCREENSHOT_LIGHT = path.join(SCREENSHOT_DIR, 'workbench-light-1440x900.png');
 const TAB_NAMES = ['Problems', 'Dependencies', 'Tests', 'Changes', 'History', 'Output'];
 const EMPTY_EXPLORER = 'Import an Appian export to begin.';
 const UUID = '_a-11111111-1111-8000-1111-111111111111_100001';
@@ -156,6 +158,25 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     const brand = page.getByLabel('Appian Sentinel');
     await expect(brand).toBeVisible();
     await expect(brand).toContainText('Appian Sentinel');
+    await expect(brand.locator('img')).toHaveAttribute('src', '/icon.png');
+  });
+
+  test('dark mode is default and light mode persists', async ({ page }) => {
+    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await expect(page.getByRole('button', { name: 'Use light mode' })).toBeVisible();
+    await page.screenshot({ path: SCREENSHOT_DARK, fullPage: false });
+
+    await page.getByRole('button', { name: 'Use light mode' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.getByRole('button', { name: 'Use dark mode' })).toBeVisible();
+    await page.screenshot({ path: SCREENSHOT_LIGHT, fullPage: false });
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 
   test('object explorer region exists and shows empty state', async ({ page }) => {

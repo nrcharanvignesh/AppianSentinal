@@ -8,7 +8,8 @@ emits full or patch ZIP packages. Python 3.11+ is required.
 1. FastAPI web/sidecar (repo root): `python -m uvicorn appian_sentinel.main:app`
    or the console script `appian-sentinel` once the package is importable.
 2. Electron + Next.js desktop app: `cd desktop` then `npm run dev`
-   (see `desktop/README.md`). Production spawn is the PyInstaller sidecar.
+   (see `desktop/README.md`). The MUI workbench defaults to dark mode and provides a
+   persistent light mode. Production spawn is the PyInstaller sidecar.
 
 ## Python environment
 
@@ -71,7 +72,7 @@ is `tests/fixtures/reference_export/` (7 files) and always runs.
 
 Defaults were moved off 7842/8888 because Testing Toolkit owns those.
 
-- Agent/sidecar: 7851 (`SENTINEL_AGENT_PORT`)
-- UI: 8871 (`SENTINEL_UI_PORT`)
+- Agent/sidecar: 7842 (`SENTINEL_AGENT_PORT`)
+- UI: 8888 (`SENTINEL_UI_PORT`)
 
 Installer and sidecar steps: `docs/RUNBOOK.md`.

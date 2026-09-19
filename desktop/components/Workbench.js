@@ -342,6 +342,10 @@ export default function Workbench() {
             onBulkPreview={api.bulkTestPreview}
             onBulkApply={api.bulkTestApply}
             onRestore={restoreRevision}
+            onPackage={async () => {
+              await api.packageFull();
+              setStatus(await api.status());
+            }}
             onDownload={api.download}
             onJumpToProblem={jumpToProblem}
             onOpenObject={openObject}

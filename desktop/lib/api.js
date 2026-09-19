@@ -108,6 +108,7 @@ export const api = {
   },
   uploadApplication: (file) => api.upload('/api/upload', file),
   uploadStory: (file) => api.upload('/api/story', file),
+  packageFull: () => request(`/api/package?session_id=${SESSION_ID}`, { method: 'POST' }),
   wsUrl: () => `${runtimeApi().wsUrl}/ws?session_id=${SESSION_ID}`,
   downloadUrl: (kind) => `${runtimeApi().baseUrl}/api/${kind}?session_id=${SESSION_ID}`,
   download,

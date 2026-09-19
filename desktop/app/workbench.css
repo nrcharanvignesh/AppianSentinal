@@ -1,4 +1,24 @@
 :root {
+  --appian-blue: #4ea1d3;
+  --appian-blue-dark: #79bce3;
+  --appian-blue-soft: #1b3445;
+  --canvas: #111820;
+  --surface: #18222d;
+  --surface-muted: #202c38;
+  --border-ui: #33414e;
+  --border-strong: #4d5d6b;
+  --text-ui: #e8eef3;
+  --text-muted-ui: #9eacb9;
+  --danger-ui: #ff8b84;
+  --success-ui: #69d28a;
+  --focus-ui: #6bb9e8;
+  --topbar-bg: #0f293b;
+  --topbar-border: #28475b;
+  --font-ui: "Segoe UI", Arial, sans-serif;
+  --font-code: "Cascadia Mono", Consolas, monospace;
+}
+
+[data-theme="light"] {
   --appian-blue: #1d6597;
   --appian-blue-dark: #174f78;
   --appian-blue-soft: #e9f3f8;
@@ -12,8 +32,8 @@
   --danger-ui: #b42318;
   --success-ui: #287a46;
   --focus-ui: #005ea8;
-  --font-ui: "Segoe UI", Arial, sans-serif;
-  --font-code: "Cascadia Mono", Consolas, monospace;
+  --topbar-bg: #174f78;
+  --topbar-border: #0f3f61;
 }
 
 button,
@@ -61,8 +81,8 @@ select:focus-visible {
   min-width: 0;
   padding: 0 12px;
   color: #ffffff;
-  background: var(--appian-blue-dark);
-  border-bottom: 1px solid #0f3f61;
+  background: var(--topbar-bg);
+  border-bottom: 1px solid var(--topbar-border);
 }
 
 .brand,
@@ -92,9 +112,17 @@ select:focus-visible {
 .brand-mark {
   width: 28px;
   height: 28px;
+  overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.55);
   border-radius: 3px;
-  font-size: 11px;
+}
+
+.brand-mark img,
+.welcome-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .workspace-name {
@@ -139,6 +167,22 @@ select:focus-visible {
   color: #e7f0f5;
   font-size: 10px;
   text-transform: uppercase;
+}
+
+.theme-toggle.MuiIconButton-root {
+  width: 30px;
+  height: 30px;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+}
+
+.theme-toggle.MuiIconButton-root:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.theme-toggle .MuiSvgIcon-root {
+  font-size: 18px;
 }
 
 .primary-button,
@@ -795,8 +839,8 @@ button:disabled {
   height: 52px;
   display: flex;
   align-items: center;
+  overflow: hidden;
   border-radius: 5px;
-  font-size: 17px;
 }
 
 .shortcut-list {
@@ -1302,6 +1346,109 @@ kbd {
 
 .statusbar span:last-child {
   text-align: right;
+}
+
+[data-theme="dark"] {
+  .count-badge {
+    background: #263542;
+  }
+
+  .tree-state.is-error {
+    background: #3a2428;
+  }
+
+  .tree-group-button:hover,
+  .object-row:hover {
+    background: #223442;
+  }
+
+  .object-row.is-selected {
+    color: #d8edf9;
+    background: #21435a;
+  }
+
+  .object-icon {
+    border-color: #52738a;
+    background: #1a3445;
+  }
+
+  .editor-tabs,
+  .tab-close:hover {
+    background: #202c38;
+  }
+
+  .file-tab {
+    background: #263542;
+  }
+
+  .code-editor,
+  .metadata-view {
+    color: #dce7ef;
+    background: #121a22;
+  }
+
+  .line-numbers {
+    border-right-color: #2c3945;
+    color: #7f8f9d;
+    background: #17212a;
+  }
+
+  .code-editor textarea {
+    caret-color: #e8eef3;
+  }
+
+  .highlight-layer {
+    color: #dce7ef;
+  }
+
+  .sail-comment {
+    color: #91b86b;
+  }
+
+  .sail-string {
+    color: #e5a76d;
+  }
+
+  .sail-number {
+    color: #c5a0f0;
+  }
+
+  .sail-callable {
+    color: #70bce8;
+  }
+
+  .sail-reference-prefix {
+    color: #cf9ee8;
+  }
+
+  .sail-operator,
+  .sail-punctuation {
+    color: #9eacb9;
+  }
+
+  .sail-operator.is-invalid,
+  .sail-string.is-invalid {
+    color: #ff9a94;
+    background: #48272b;
+    text-decoration-color: #ff9a94;
+  }
+
+  .assistant-empty {
+    background: #1a2935;
+  }
+
+  .chat-message.is-user p,
+  .form-state {
+    border-color: #3d6078;
+    color: #d8edf9;
+  }
+
+  .composer textarea,
+  .assistant-form input,
+  .assistant-form select {
+    color: var(--text-ui);
+    background: var(--surface);
+  }
 }
 
 @media (max-width: 1100px) {

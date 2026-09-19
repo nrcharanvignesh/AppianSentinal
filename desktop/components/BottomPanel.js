@@ -17,6 +17,7 @@ export default function BottomPanel({
   onBulkPreview,
   onBulkApply,
   onRestore,
+  onPackage,
   onDownload,
   onJumpToProblem,
   onOpenObject,
@@ -234,6 +235,7 @@ export default function BottomPanel({
         {active === 'Output' && (
           <div className="output-actions">
             <p>{output?.has_output_zip || output?.has_patch_zip ? 'Build artifacts are ready.' : 'No build artifacts are available.'}</p>
+            <button type="button" disabled={!codebaseLoaded} onClick={() => onPackage()}>Rebuild ZIP</button>
             <button type="button" disabled={!output?.has_patch_zip} onClick={() => onDownload('patch')}>Download patch</button>
             <button type="button" disabled={!output?.has_output_zip} onClick={() => onDownload('download')}>Download rebuilt ZIP</button>
           </div>

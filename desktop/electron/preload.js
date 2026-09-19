@@ -14,9 +14,9 @@ function desktopArgument(name, fallback) {
 }
 
 const api = Object.freeze({
-  baseUrl: desktopArgument('sentinel-base-url', 'http://127.0.0.1:7851'),
-  wsUrl: desktopArgument('sentinel-ws-url', 'ws://127.0.0.1:7851'),
-  port: Number(desktopArgument('sentinel-port', '7851')),
+  baseUrl: desktopArgument('sentinel-base-url', 'http://127.0.0.1:7842'),
+  wsUrl: desktopArgument('sentinel-ws-url', 'ws://127.0.0.1:7842'),
+  port: Number(desktopArgument('sentinel-port', '7842')),
   token: desktopArgument('sentinel-token', ''),
 });
 

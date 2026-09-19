@@ -202,7 +202,9 @@ export default function EditorWorkspace({
 
       {!tab && (
         <div className="editor-welcome">
-          <span className="welcome-mark" aria-hidden="true">AS</span>
+          <span className="welcome-mark" aria-hidden="true">
+            <img src="/icon.png" alt="" />
+          </span>
           <h1>
             {codebaseLoading
               ? 'Loading Appian application'

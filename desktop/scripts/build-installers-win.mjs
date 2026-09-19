@@ -150,7 +150,9 @@ try {
     workRoot = mirrorToShortPath();
   }
 
-  run(process.env.PYTHON || 'python', ['-m', 'PyInstaller', 'sidecar.spec', '--noconfirm'], workRoot);
+  const python = process.env.PYTHON || 'python';
+  run(python, ['-m', 'PyInstaller', 'sidecar.spec', '--noconfirm'], workRoot);
+  run(python, ['desktop/scripts/make-icon.py'], workRoot);
   run('npm', ['run', 'build:desktop'], join(workRoot, 'desktop'));
 
   const releaseDir = join(workRoot, 'desktop', 'release', 'desktop');

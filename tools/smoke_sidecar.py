@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 HOST = "127.0.0.1"
-PORT = 7851
+PORT = int(os.environ.get("SENTINEL_AGENT_PORT", "7842"))
 BASE_URL = f"http://{HOST}:{PORT}"
 HEALTH_URL = f"{BASE_URL}/api/health"
 STATUS_URL = f"{BASE_URL}/api/status"

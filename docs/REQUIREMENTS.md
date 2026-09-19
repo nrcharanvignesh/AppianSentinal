@@ -46,7 +46,7 @@ checks pass.
 
 8. Resolve UUIDs, names, source files, and object references bidirectionally.
     - Acceptance: every indexed object resolves by UUID and name where metadata exists.
-    - Status: PARTIAL. Ambiguity and unique-resolution tests in `tests/test_codebase_inventory.py` passed. Full-export "every object" resolution is not in the default suite.
+    - Status: MET FOR SYNTHETIC SCALE IN CI; REAL-EXPORT "EVERY OBJECT" REMAINS LOCAL-ONLY. `test_synthetic_scale_every_uuid_and_unique_name_resolves` parses a 300-object generated export, resolves every UUID via `get_object`, and treats duplicate names as `AmbiguousObjectNameError` rather than a guess. Slim unique/ambiguous cases remain in `tests/test_codebase_inventory.py`. `test_optional_full_reference_inventory_reconciles` now also asserts `get_object` for all 2,624 real UUIDs when `./appian_export/` is present.
 
 9. Provide an Appian expression AST and code-intelligence service.
     - Include source ranges, diagnostics, symbols, references, formatting, and safe edits.
@@ -146,7 +146,7 @@ checks pass.
 27. Provide object browsing for interfaces, constants, rules, record types, process
     models, and every other parsed type.
     - Acceptance: users can open objects from the type tree and inspect metadata and source.
-    - Status: MET. `npx playwright test` -> 12 passed, and the rendered workbench screenshot shows the typed Object Explorer tree, name/UUID search, and an opened object with Source and Metadata tabs. Caveat: the rendered runs use the deterministic sidecar fixture, so tree behaviour at 2,624-object scale is inferred from the parser tests rather than observed.
+    - Status: MET. `npx playwright test` -> 17 passed, and the rendered workbench screenshot shows the typed Object Explorer tree, name/UUID search, and an opened object with Source and Metadata tabs. Caveat: the rendered runs use the deterministic sidecar fixture, so tree behaviour at 2,624-object scale is inferred from the parser tests rather than observed.
 
 28. Provide a proper Appian-focused IDE.
     - Include object explorer, tabs, read/edit source, SAIL highlighting, diagnostics,
@@ -158,7 +158,7 @@ checks pass.
     - Use Appian-style information hierarchy, navigation, density, controls, color,
       typography, focus behavior, loading, empty, and error states.
     - Acceptance: rendered desktop views pass the visual acceptance checklist.
-    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. All 40 pass after direct inspection of five rendered screenshots at 1024x640 and 1440x900; initial failures for development chrome, offline status color, focus evidence, and missing state evidence were fixed. `npx playwright test` passed 16 tests, including visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
+    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. MUI dark mode is the default, light mode persists across reloads, and both use the supplied product icon. `npx playwright test` passed 17 tests, including both rendered themes, visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
 
 30. Show progress for upload, parsing, AI calls, all workflow steps, test runs,
     packaging, and downloads.
@@ -170,7 +170,7 @@ checks pass.
     - Start and stop the sidecar safely, bind only to loopback, work without a browser,
       and provide full and patch ZIP downloads.
     - Acceptance: a clean-machine installer test completes the full reference workflow.
-    - Status: PARTIAL. `npm run build:installers:win` completed end to end and wrote `installers/AppianSentinel-Standalone-Install.cmd` (242.3 MB). The embedded payload was verified byte-exact: 190,525,297 bytes and SHA-256 `79c69bba8c27cf9038dd3b4a623ba38f1d0f9352bcf4e89745c0980a7164d336` match both the header values and the signed `AppianSentinel-Setup.exe` on disk; `#PSBEGIN`/`:BUNDLE` markers present; zero non-ASCII header lines. The frozen sidecar smoke passes against the real exe (`/api/health` ownership echo, 401 without token, 200 with). STILL NOT MET: no clean-machine install, and the full reference workflow has not been driven through the installed app.
+    - Status: PARTIAL. Installer `.cmd` built. Documents install exists. `prove_desktop_boot.py` against that `AppianSentinel.exe` returned health 200 on 7842 and UI bound on 8888 (`boot_exit=0`). Frozen sidecar pytest covers upload, package, download. STILL NOT MET: clean-machine GUI of the full ZIP import/rebuild workflow.
 
 ## Release gate
 
@@ -181,7 +181,7 @@ behavior inside an Appian environment.
 
 Current standing against that gate: automated checks pass and package round trips pass,
 including the full 2,624-object rebuild. Rendered UI checks (R27, R28, R29) now have a
-green 16-test run and a 40-item visual acceptance pass. One condition remains unmet:
+green 17-test run and a 40-item visual acceptance pass. One condition remains unmet:
 clean-machine installation (R31) has a hash-verified artifact
 but no install on a machine without the development toolchain, so the full reference
 workflow has never been driven through the installed application. Until that clears,

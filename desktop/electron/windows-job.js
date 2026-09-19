@@ -115,7 +115,15 @@ public static class AppianSentinelJob {
       } finally {
         Marshal.FreeHGlobal(data);
       }
-      if (!AssignProcessToJobObject(job, process)) Win32("AssignProcessToJobObject");
+      if (!AssignProcessToJobObject(job, process)) {
+        CloseHandle(job);
+        job = IntPtr.Zero;
+        // Nested parent jobs cannot be reassigned; Electron still boots.
+        System.IO.File.WriteAllText(
+          readyPath, "READY|" + created.ToString(), System.Text.Encoding.ASCII);
+        WaitForSingleObject(process, INFINITE);
+        return created;
+      }
       System.IO.File.WriteAllText(
         readyPath, "READY|" + created.ToString(), System.Text.Encoding.ASCII);
       WaitForSingleObject(process, INFINITE);
