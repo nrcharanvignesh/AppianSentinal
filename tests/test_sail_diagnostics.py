@@ -22,7 +22,11 @@ def test_build_qualified_appian_version_uses_major_minor() -> None:
     assert parse_version("26.6.205.0") == (26, 6)
 
 
-def test_unknown_callable_warns_but_known_invalid_callable_errors() -> None:
+def test_callable_problems_are_warnings_not_syntax_errors() -> None:
+    # Appian reserves the red error indicator for syntax errors, and
+    # suppresses all other guidance until they are fixed. An unknown or
+    # withdrawn function still parses, so reporting it as an error would
+    # hide every other finding on the object.
     unknown = analyze_sail(
         "a!futureWidget(value: 1)",
         target_version="26.6",
@@ -37,9 +41,10 @@ def test_unknown_callable_warns_but_known_invalid_callable_errors() -> None:
     ]
     assert any(
         item.code == "SAIL020"
-        and item.severity == DiagnosticSeverity.ERROR
+        and item.severity == DiagnosticSeverity.WARNING
         for item in invalid.diagnostics
     )
+    assert invalid.is_valid
 
 
 def test_valid_map_is_not_rejected() -> None:

@@ -472,6 +472,7 @@ export default function Workbench() {
             activeId={activeId}
             navigation={navigation}
             testableObjects={testableObjects}
+            object={object}
             codebaseLoaded={Boolean(codebase)}
             onBulkPreview={api.bulkTestPreview}
             onBulkApply={api.bulkTestApply}

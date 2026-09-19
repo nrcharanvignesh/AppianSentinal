@@ -249,3 +249,12 @@
     flex: 1;
   }
 }
+
+.adhoc-limitation {
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  border-left: 3px solid var(--appian-blue);
+  color: var(--text-muted-ui);
+  background: var(--surface-muted);
+  font-size: 11px;
+}

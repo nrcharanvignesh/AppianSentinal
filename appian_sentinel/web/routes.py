@@ -388,7 +388,24 @@ async def get_codebase(request: Request) -> JSONResponse:
         # needs descriptions without a round trip per object. Only non-empty
         # ones are sent: most objects have none and the app has thousands.
         "descriptions": _descriptions(cm),
+        # The Build grid needs these to offer Appian's hierarchical view and
+        # its unreferenced objects tab without a request per object.
+        "reverse_dependencies": {
+            uuid: sorted(dependents)
+            for uuid, dependents in (cm.get("reverse_dependencies", {}) or {}).items()
+        },
+        "parent_by_uuid": _parents(cm),
     })
+
+
+def _parents(codebase_map: dict) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for key, raw in (codebase_map.get("objects", {}) or {}).items():
+        obj = raw if isinstance(raw, dict) else getattr(raw, "__dict__", {})
+        parent = str(obj.get("parent_uuid") or "").strip()
+        if parent:
+            result[str(obj.get("uuid") or key)] = parent
+    return result
 
 
 def _descriptions(codebase_map: dict) -> dict[str, str]:

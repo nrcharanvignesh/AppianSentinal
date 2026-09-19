@@ -135,6 +135,6 @@ def test_icon_lane_does_not_change_callable_diagnostics() -> None:
     ]
     invalid = analyze_sail("a!filter(items: {})", target_version="26.6")
     assert any(
-        item.code == "SAIL020" and item.severity == DiagnosticSeverity.ERROR
+        item.code == "SAIL020" and item.severity == DiagnosticSeverity.WARNING
         for item in invalid.diagnostics
     )

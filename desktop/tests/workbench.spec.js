@@ -33,6 +33,7 @@ async function stubSidecar(page, options = {}) {
     uuidToName = null,
     objectTypeByUuid = null,
     descriptions = null,
+    diagnostics = null,
     models = null,
     modelsError = '',
     settingsTestError = '',
@@ -90,7 +91,7 @@ async function stubSidecar(page, options = {}) {
       status = 409;
       body = { detail: { reason: 'workspace_not_clean' } };
     } else if (url.pathname === `/api/objects/${UUID}/diagnostics`) {
-      body = {
+      body = diagnostics ? { is_valid: false, diagnostics } : {
         is_valid: false,
         diagnostics: [{
           code: 'SAIL001',
@@ -429,7 +430,7 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     // recovery path, so gating them on being online would trap the operator.
     await page.getByRole('tab', { name: 'Settings' }).click();
     await expect(page.getByRole('button', { name: 'Test', exact: true })).toBeEnabled();
-    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
   });
 });
 
@@ -450,10 +451,10 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
 
     const editor = page.getByLabel('APP_Test source editor');
     await editor.fill(`${SOURCE}\n1`);
-    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
     await editor.press('Control+z');
     await expect(editor).toHaveValue(SOURCE);
-    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
     await editor.press('Control+y');
     await expect(editor).toHaveValue(`${SOURCE}\n1`);
     await editor.press('Control+Shift+z');
@@ -499,7 +500,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
 
     const editor = page.getByLabel('APP_Test source editor');
     await editor.fill('2 + 2');
-    const save = page.getByRole('button', { name: 'Save' });
+    const save = page.getByRole('button', { name: 'Save', exact: true });
     await expect(save).toBeEnabled();
     await save.click();
     await expect(page.getByText('Saved')).toBeVisible();
@@ -743,5 +744,73 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
 
     await grid.getByRole('button', { name: 'APP_Request' }).click();
     await expect(page.locator('.code-editor')).toContainText('record_type source for APP_Request');
+  });
+});
+
+// These components were each proved in isolation while they were built. They
+// are re-covered here through the real shell, because the serialisation
+// defect showed that a component passing against a stub proves nothing about
+// the app the user runs.
+test.describe('Appian Designer surfaces in the assembled workbench', () => {
+  test('the application navigation offers Appian views and admits what is missing', async ({ page }) => {
+    await openWorkbench(page, true);
+    const nav = page.getByRole('navigation', { name: 'Application' });
+
+    for (const label of ['Plan', 'Explore', 'Build', 'Packages', 'Deploy', 'Monitor']) {
+      await expect(nav.getByRole('button', { name: label })).toBeVisible();
+    }
+    await expect(nav.getByRole('button', { name: 'Build' })).toHaveAttribute('aria-current', 'page');
+    // Unbuilt views must be disabled rather than hidden or silently inert.
+    await expect(nav.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+  });
+
+  test('problems use Appian severities and suppress guidance behind syntax errors', async ({ page }) => {
+    await stubSidecar(page, {
+      loaded: true,
+      diagnostics: [
+        { code: 'SAIL010', message: 'Unbalanced parenthesis', severity: 'error', line: 2 },
+        { code: 'SAIL020', message: 'Unknown function a!nope', severity: 'warning', line: 3 },
+        { code: 'SAIL032', message: "Declared input 'unused' is never used", severity: 'recommendation', line: 1 },
+      ],
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('treeitem', { name: 'APP_Test' }).click();
+    await page.getByRole('tab', { name: /^Problems/ }).click();
+
+    // A syntax error is present, so Appian suppresses the rest until it is
+    // fixed, and says so rather than silently dropping findings.
+    await expect(page.getByText('Unbalanced parenthesis')).toBeVisible();
+    await expect(page.getByText(/suppress/i)).toBeVisible();
+  });
+
+  test('the expression toolbar formats source and is honest about live-only actions', async ({ page }) => {
+    await openWorkbench(page, true);
+    await page.getByRole('treeitem', { name: 'APP_Test' }).click();
+
+    const editor = page.getByLabel('APP_Test source editor');
+    await expect(editor).toBeVisible();
+
+    // Formatting must be idempotent: a second press changes nothing.
+    const format = page.getByRole('button', { name: /Format expression/i });
+    await format.click();
+    const once = await editor.inputValue();
+    await format.click();
+    expect(await editor.inputValue()).toBe(once);
+
+    // Actions that need a live Appian environment are disabled, not fake.
+    await expect(page.getByRole('button', { name: /Launch the Query Editor/i })).toBeDisabled();
+  });
+
+  test('the ad hoc test view never claims the rule was evaluated', async ({ page }) => {
+    await openWorkbench(page, true);
+    await page.getByRole('treeitem', { name: 'APP_Test' }).click();
+    await page.getByRole('tab', { name: 'Ad Hoc Test' }).click();
+
+    await expect(page.getByText('Test Inputs')).toBeVisible();
+    await expect(page.getByText('Test Output')).toBeVisible();
+    await expect(page.getByRole('button', { name: /TEST RULE/i })).toBeVisible();
+    // The absence of an Appian engine has to be stated before the run, not
+    // implied afterwards by a missing output value.
+    await expect(page.getByText(/Static analysis only/i).first()).toBeVisible();
   });
 });

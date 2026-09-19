@@ -498,11 +498,12 @@ class TempoReport(AppianObject):
     """A legacy Tempo report."""
 
     object_type: ObjectType = ObjectType.TEMPO_REPORT
+    expression: str = ""
     ui_expression: str = ""
     url_stub: str = ""
 
     def get_uuid_references(self) -> set[str]:
-        return extract_uuid_references(self.ui_expression)
+        return extract_uuid_references(self.expression or self.ui_expression)
 
 
 class Portal(AppianObject):

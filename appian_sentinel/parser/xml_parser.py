@@ -86,6 +86,15 @@ def _text_or_cdata(element: etree._Element | None) -> str:
     return element.text or ""
 
 
+def _constant_value_source(element: etree._Element | None) -> str:
+    """Return scalar text or the XML representation of a structured constant value."""
+    if element is None:
+        return ""
+    if len(element) == 0 and not element.attrib:
+        return _text(element)
+    return etree.tostring(element, encoding="unicode", with_tail=False).strip()
+
+
 def _bool_text(element: etree._Element | None, default: bool = False) -> bool:
     """Parse a boolean text element like ``<offlineEnabled>false</offlineEnabled>``."""
     t = _text(element).lower()
@@ -348,7 +357,7 @@ def _parse_constant(const_el: etree._Element, root: etree._Element) -> Constant:
         if type_el is not None:
             value_type = _text(_find(type_el, "name"))
             value_type_ns = _text(_find(type_el, "namespace"))
-        value = _text(_find(typed_val_el, "value"))
+        value = _constant_value_source(_find(typed_val_el, "value"))
 
     return Constant(
         uuid=_text(_find(const_el, "uuid")),
@@ -1279,6 +1288,7 @@ def parse_tempo_report_xml(xml_path: Path) -> TempoReport | None:
     report_el = _find(root, "tempoReport")
     if report_el is None:
         return None
+    expression = _text_or_cdata(_find(report_el, "uiExpr"))
     return TempoReport(
         uuid=_attribute(report_el, "uuid"),
         name=_attribute(report_el, "name"),
@@ -1286,7 +1296,8 @@ def parse_tempo_report_xml(xml_path: Path) -> TempoReport | None:
         version_uuid=_text(_find(root, "versionUuid")),
         file_path=str(xml_path),
         security_roles=_parse_role_map(_find(root, "roleMap")),
-        ui_expression=_text_or_cdata(_find(report_el, "uiExpr")),
+        expression=expression,
+        ui_expression=expression,
         url_stub=_text(_find(report_el, "urlStub")),
     )
 

@@ -28,10 +28,19 @@ from appian_sentinel.parser.sail_catalog import (
 
 
 class DiagnosticSeverity(str, Enum):
-    """Stable diagnostic severities."""
+    """Appian's design guidance levels, plus the syntax error.
+
+    Appian has exactly two guidance levels, Warning and Recommendation, and
+    reserves red for a syntax error, which suppresses guidance until it is
+    fixed. Anything semantic, such as an unknown function or an unresolved
+    reference, is a warning rather than an error: the expression still
+    parses, so reporting it as a syntax error both misstates the problem and
+    hides every other finding on the object.
+    """
 
     ERROR = "error"
     WARNING = "warning"
+    RECOMMENDATION = "recommendation"
 
 
 @dataclass(frozen=True)
@@ -264,11 +273,7 @@ def analyze_sail(
         diagnostics.append(SailDiagnostic(
             "SAIL020" if decision.status == "invalid" else "SAIL021",
             decision.reason,
-            (
-                DiagnosticSeverity.ERROR
-                if decision.status == "invalid"
-                else DiagnosticSeverity.WARNING
-            ),
+            DiagnosticSeverity.WARNING,
             _node_range(source, node),
         ))
 
@@ -347,7 +352,7 @@ def analyze_sail(
                         f'Unresolved UUID reference: #"{node.uuid}" '
                         f"(owning object: {owner_uuid})"
                     ),
-                    DiagnosticSeverity.ERROR,
+                    DiagnosticSeverity.WARNING,
                     _node_range(source, node),
                 ))
 
@@ -359,14 +364,14 @@ def analyze_sail(
                 diagnostics.append(SailDiagnostic(
                     "SAIL031",
                     f"Rule input 'ri!{node.name}' is not declared",
-                    DiagnosticSeverity.ERROR,
+                    DiagnosticSeverity.WARNING,
                     _node_range(source, node),
                 ))
         for name in sorted(declared - used):
             diagnostics.append(SailDiagnostic(
                 "SAIL032",
                 f"Declared input '{name}' is never used",
-                DiagnosticSeverity.WARNING,
+                DiagnosticSeverity.RECOMMENDATION,
                 _range(source, 0, len(source)),
             ))
 

@@ -2,10 +2,14 @@
 
 import { useMemo, useState } from 'react';
 
+import { normalizeDiagnostics } from '../lib/design-guidance';
+import DesignGuidancePanel from './DesignGuidancePanel';
+
 const PANELS = ['Problems', 'Dependencies', 'Tests', 'Changes', 'History', 'Output'];
 
 export default function BottomPanel({
   diagnostics,
+  object,
   tests,
   changes,
   history,
@@ -127,20 +131,12 @@ export default function BottomPanel({
             ? <p className="empty-result">Diagnostics error: {diagnostics.error}</p>
             : diagnostics === null
               ? <p className="empty-result">Open an object to load its diagnostics.</p>
-              : problems.length
-            ? problems.map((problem, index) => (
-              <button
-                type="button"
-                className="problem-row"
-                key={`${problem.code || 'problem'}-${index}`}
-                onClick={() => onJumpToProblem(problem)}
-              >
-                <b>{String(problem.severity || 'error').toUpperCase()}</b>
-                {problem.code ? `${problem.code}: ` : ''}{problem.message}
-                {problem.line ? ` (line ${problem.line})` : ''}
-              </button>
-            ))
-            : <p className="empty-result">No diagnostics reported.</p>)}
+              : (
+                <DesignGuidancePanel
+                  findings={normalizeDiagnostics(diagnostics, object)}
+                  onOpenFinding={onJumpToProblem}
+                />
+              ))}
         {active === 'Dependencies' && (!activeId
           ? <p className="empty-result">Open an object to inspect dependencies.</p>
           : (

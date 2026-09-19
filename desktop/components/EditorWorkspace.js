@@ -6,6 +6,8 @@ import { extractSymbols } from '../lib/sail-symbols';
 import { api } from '../lib/api';
 import AdHocTestPanel from './AdHocTestPanel';
 import BuildGrid from './BuildGrid';
+import ExpressionDocs from './ExpressionDocs';
+import ExpressionToolbar from './ExpressionToolbar';
 
 const SOURCE_FIELDS = ['definition', 'expression', 'value'];
 
@@ -68,6 +70,10 @@ export default function EditorWorkspace({
   const [copyState, setCopyState] = useState('Copy source');
   const [saveState, setSaveState] = useState('');
   const [choices, setChoices] = useState([]);
+  const [editorSelection, setEditorSelection] = useState({ start: 0, end: 0 });
+  const [indentGuide, setIndentGuide] = useState(false);
+  const [showFunctionList, setShowFunctionList] = useState(false);
+  const [docsFunction, setDocsFunction] = useState('');
   const editorRef = useRef(null);
   const highlightRef = useRef(null);
   const lineNumbersRef = useRef(null);
@@ -109,6 +115,24 @@ export default function EditorWorkspace({
     if (items.length > 100) items.shift();
     historyRef.current = { items, index: items.length - 1 };
     setSource(value);
+  }
+
+  function captureSelection(event) {
+    setEditorSelection({
+      start: event.currentTarget.selectionStart,
+      end: event.currentTarget.selectionEnd,
+    });
+  }
+
+  function applyExpressionChange(nextValue, nextSelection) {
+    recordChange(nextValue);
+    setEditorSelection(nextSelection);
+    // The textarea is uncontrolled with respect to selection, so the caret
+    // has to be restored after React commits the new value.
+    window.requestAnimationFrame(() => {
+      editorRef.current?.focus();
+      editorRef.current?.setSelectionRange(nextSelection.start, nextSelection.end);
+    });
   }
 
   function moveHistory(delta) {
@@ -205,7 +229,12 @@ export default function EditorWorkspace({
       </div>
 
       {!tab && codebaseLoaded && (
-        <BuildGrid codebase={codebase} onOpenObject={onOpenObject} />
+        <BuildGrid
+          codebase={codebase}
+          onOpenObject={onOpenObject}
+          reverseDependencies={codebase?.reverse_dependencies}
+          parentByUuid={codebase?.parent_by_uuid}
+        />
       )}
 
       {!tab && !codebaseLoaded && (
@@ -253,6 +282,17 @@ export default function EditorWorkspace({
           <div className="editor-content" aria-live="polite">
             {loading && <div className="center-state">Loading object source...</div>}
             {!loading && error && <div className="center-state error-text">Could not open object: {error}</div>}
+            {!loading && !error && object && view === 'source' && source && (
+              <ExpressionToolbar
+                value={source}
+                selectionStart={editorSelection.start}
+                selectionEnd={editorSelection.end}
+                onChange={applyExpressionChange}
+                indentGuide={indentGuide}
+                onToggleIndentGuide={() => setIndentGuide((current) => !current)}
+                onViewFunctions={() => setShowFunctionList((current) => !current)}
+              />
+            )}
             {!loading && !error && object && view === 'source' && (
               source ? (
                 <div className="editor-with-outline">
@@ -269,6 +309,9 @@ export default function EditorWorkspace({
                         onChange={(event) => recordChange(event.target.value)}
                         onDoubleClick={followReference}
                         onKeyDown={editorShortcut}
+                        onKeyUp={captureSelection}
+                        onSelect={captureSelection}
+                        onClick={captureSelection}
                         onScroll={syncScroll}
                         spellCheck="false"
                       />
@@ -288,6 +331,13 @@ export default function EditorWorkspace({
                       </button>
                     )) : <p>No symbols found.</p>}
                   </aside>
+                  {showFunctionList && (
+                    <ExpressionDocs
+                      functionName={docsFunction}
+                      showFunctions
+                      onSelectFunction={setDocsFunction}
+                    />
+                  )}
                 </div>
               ) : <div className="center-state">This object has no editable source definition.</div>
             )}
