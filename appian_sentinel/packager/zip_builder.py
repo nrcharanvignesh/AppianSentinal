@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 _REQUIRED_ROOTS = {"META-INF"}
 _MANIFEST_PATH = "META-INF/MANIFEST.MF"
 _EXPORT_LOG_PATH = "META-INF/export.log"
+# WorkspaceHistoryService stores snapshots inside the export directory. They
+# are Sentinel's internal state and must never reach an Appian import ZIP.
+_INTERNAL_ROOTS = {".history"}
 
 
 def build_appian_zip(
@@ -60,7 +63,9 @@ def build_appian_zip(
     files = [
         path
         for path in sorted(export_dir.rglob("*"))
-        if path.is_file() and path.resolve() != output_path
+        if path.is_file()
+        and path.resolve() != output_path
+        and path.relative_to(export_dir).parts[0] not in _INTERNAL_ROOTS
     ]
     descriptor, temporary_name = tempfile.mkstemp(
         dir=output_path.parent,

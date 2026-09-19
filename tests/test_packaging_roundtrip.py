@@ -70,6 +70,26 @@ def _snapshot(root: Path) -> dict[str, str]:
     }
 
 
+def test_full_zip_excludes_internal_workspace_history(tmp_path: Path) -> None:
+    """The .history store lives inside the export dir but is not Appian content."""
+    source = tmp_path / "source"
+    refs = _make_export(source)
+    history_blob = source / ".history" / "blobs" / "deadbeef"
+    history_blob.parent.mkdir(parents=True)
+    history_blob.write_bytes(b"internal snapshot")
+    (source / ".history" / "index.json").write_text("{}", encoding="utf-8")
+
+    output = tmp_path / "full.zip"
+    build_appian_zip(source, output, list(refs[:1]))
+
+    with zipfile.ZipFile(output) as archive:
+        names = archive.namelist()
+    assert not [name for name in names if name.startswith(".history")], names
+    # Real export content is still packaged.
+    assert "META-INF/export.log" in names
+    assert "content/one.xml" in names
+
+
 def test_full_zip_is_pure_and_preserves_manifest_bytes(tmp_path: Path) -> None:
     source = tmp_path / "source"
     refs = _make_export(source)

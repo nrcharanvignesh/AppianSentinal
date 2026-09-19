@@ -49,6 +49,20 @@ function isZip(path) {
   }
 }
 
+// A rebuilt export must contain Appian content only. Node has no zip reader.
+function auditArchive(path) {
+  const script = [
+    'import json,sys,zipfile',
+    'n=zipfile.ZipFile(sys.argv[1]).namelist()',
+    'print(json.dumps({"entries":len(n),'
+      + '"internal":len([x for x in n if x.startswith(".history")])}))',
+  ].join('\n');
+  const output = execFileSync(process.env.PYTHON || 'python', ['-c', script, path], {
+    encoding: 'utf8',
+  });
+  return JSON.parse(output.trim());
+}
+
 async function waitForNewDownload(before, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -162,6 +176,13 @@ async function main() {
       return 1;
     }
     log('SUCCESS', `GUI download saved a ${savedMb} MB ZIP to ${saved}`);
+
+    const audit = auditArchive(saved);
+    if (audit.internal > 0) {
+      log('ERROR', `rebuilt ZIP carries ${audit.internal} internal .history entries`);
+      return 1;
+    }
+    log('SUCCESS', `rebuilt ZIP is import-clean: ${audit.entries} entries, no internal state`);
 
     log('SUCCESS', 'R31 reference workflow completed through the installed GUI');
     return 0;
