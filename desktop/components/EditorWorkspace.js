@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { decorateTokens, positionToOffset, referenceAt } from '../lib/sail-highlight';
 import { extractSymbols } from '../lib/sail-symbols';
+import BuildGrid from './BuildGrid';
 
 const SOURCE_FIELDS = ['definition', 'expression', 'value'];
 
@@ -53,6 +54,7 @@ export default function EditorWorkspace({
   error,
   codebaseLoading,
   codebaseLoaded,
+  codebase,
   onActivate,
   onClose,
   onSave,
@@ -200,29 +202,23 @@ export default function EditorWorkspace({
         )) : <span className="empty-tab">No object open</span>}
       </div>
 
-      {!tab && (
+      {!tab && codebaseLoaded && (
+        <BuildGrid codebase={codebase} onOpenObject={onOpenObject} />
+      )}
+
+      {!tab && !codebaseLoaded && (
         <div className="editor-welcome">
           <span className="welcome-mark" aria-hidden="true">
             <img src="/icon.png" alt="" />
           </span>
           <h1>
-            {codebaseLoading
-              ? 'Loading Appian application'
-              : codebaseLoaded ? 'Appian workbench' : 'Import an Appian application'}
+            {codebaseLoading ? 'Loading Appian application' : 'Import an Appian application'}
           </h1>
           <p>
             {codebaseLoading
               ? 'Reading application objects from the sidecar.'
-              : codebaseLoaded
-                ? 'Select an object from the explorer to inspect its source and metadata.'
-                : 'Use Import application in the top bar to load an Appian export ZIP.'}
+              : 'Use Import application in the top bar to load an Appian export ZIP.'}
           </p>
-          {codebaseLoaded && (
-            <div className="shortcut-list">
-              <span>Find object</span><kbd>Ctrl</kbd><kbd>K</kbd>
-              <span>Copy source</span><kbd>Ctrl</kbd><kbd>C</kbd>
-            </div>
-          )}
         </div>
       )}
 

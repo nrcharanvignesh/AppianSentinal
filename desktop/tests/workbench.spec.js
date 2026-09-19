@@ -32,6 +32,7 @@ async function stubSidecar(page, options = {}) {
     byType = null,
     uuidToName = null,
     objectTypeByUuid = null,
+    descriptions = null,
     models = null,
     modelsError = '',
     settingsTestError = '',
@@ -66,6 +67,7 @@ async function stubSidecar(page, options = {}) {
             [HELPER_UUID]: 'APP_Helper',
             [HELPER_UUID_2]: 'APP_Helper',
           },
+          descriptions: descriptions || {},
         } : null;
       }
     } else if (url.pathname === '/api/status') {
@@ -646,10 +648,14 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
   test('a failed connection test shows the reason, not just the status', async ({ page }) => {
     await stubSidecar(page, {
       loaded: true,
+      // Give the picker a model so its status line resolves before the click:
+      // otherwise the model fetch and the test result race to the same region.
+      models: ['bedrock.anthropic.claude-sonnet-5'],
       settingsTestError: 'HTTP 404 from https://gw/v1/chat/completions: route not found',
     });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await page.getByRole('tab', { name: 'Settings' }).click();
+    await expect(page.getByLabel('Primary model')).toHaveRole('combobox');
     await page.getByRole('button', { name: 'Test' }).click();
 
     // The old client dropped the body and rendered "502 Bad Gateway".
@@ -704,5 +710,34 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
 
     await page.getByRole('treeitem', { name: 'APP_RequestApproval', exact: true }).click();
     await expect(page.locator('.code-editor')).toContainText('process_model source for APP_RequestApproval');
+  });
+
+  test('the build grid matches Appian Designer columns and opens objects', async ({ page }) => {
+    // Appian's Build grid is [checkbox] [type icon] Name | Description |
+    // Last Modified. An export has no timestamp, so Last Modified is omitted
+    // rather than filled in. See docs/APPIAN-DESIGNER-REFERENCE.md.
+    const byType = { record_type: ['uuid-rt'], expression_rule: ['uuid-er'] };
+    const uuidToName = { 'uuid-rt': 'APP_Request', 'uuid-er': 'APP_CalculateTotal' };
+    await stubSidecar(page, {
+      loaded: true,
+      byType,
+      uuidToName,
+      objectTypeByUuid: { 'uuid-rt': 'record_type', 'uuid-er': 'expression_rule' },
+      descriptions: { 'uuid-rt': 'Requests raised by staff' },
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    const grid = page.getByLabel('Build view');
+    await expect(grid.getByRole('columnheader', { name: 'Name' })).toBeVisible();
+    await expect(grid.getByRole('columnheader', { name: 'Description' })).toBeVisible();
+    await expect(grid.getByRole('columnheader', { name: 'Last Modified' })).toHaveCount(0);
+    await expect(grid.getByText('Requests raised by staff')).toBeVisible();
+
+    // Filtering by the official type label narrows the grid.
+    await grid.getByLabel('Filter by object type').selectOption('record_type');
+    await expect(grid.getByRole('button', { name: 'APP_CalculateTotal' })).toHaveCount(0);
+
+    await grid.getByRole('button', { name: 'APP_Request' }).click();
+    await expect(page.locator('.code-editor')).toContainText('record_type source for APP_Request');
   });
 });

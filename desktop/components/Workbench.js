@@ -438,6 +438,7 @@ export default function Workbench() {
             error={objectState.error}
             codebaseLoading={codebaseState.loading}
             codebaseLoaded={Boolean(codebase)}
+            codebase={codebase}
             onActivate={activateTab}
             onClose={closeTab}
             onSave={saveObject}

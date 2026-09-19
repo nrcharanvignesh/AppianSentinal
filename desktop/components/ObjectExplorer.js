@@ -2,9 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-function displayType(value) {
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
+import { objectMeta } from '../lib/appian-objects';
 
 export default function ObjectExplorer({ codebase, loading, error, selectedId, onSelect }) {
   const [query, setQuery] = useState('');
@@ -89,7 +87,7 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
                 onClick={() => setExpanded((value) => ({ ...value, [group.type]: !isOpen }))}
               >
                 <span className="chevron" aria-hidden="true">{isOpen ? 'v' : '>'}</span>
-                <span>{displayType(group.type)}</span>
+                <span>{objectMeta(group.type).label}</span>
                 <span className="group-count">{group.items.length}</span>
               </button>
               {isOpen && (
@@ -104,7 +102,13 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
                       title={`${item.name}\n${item.uuid}`}
                       onClick={() => onSelect(item)}
                     >
-                      <span className="object-icon" aria-hidden="true">{group.type.slice(0, 2).toUpperCase()}</span>
+                      <span
+                        className="object-icon"
+                        aria-hidden="true"
+                        style={{ background: objectMeta(group.type).color }}
+                      >
+                        {objectMeta(group.type).abbreviation}
+                      </span>
                       <span className="object-label">{item.name}</span>
                     </button>
                   ))}

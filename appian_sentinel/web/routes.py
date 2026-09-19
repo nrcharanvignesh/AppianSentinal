@@ -384,7 +384,21 @@ async def get_codebase(request: Request) -> JSONResponse:
         "appian_version": cm.get("appian_version", ""),
         "by_type": cm.get("by_type", {}),
         "uuid_to_name": cm.get("uuid_to_name", {}),
+        # Appian's Build grid shows a Description column, so the object list
+        # needs descriptions without a round trip per object. Only non-empty
+        # ones are sent: most objects have none and the app has thousands.
+        "descriptions": _descriptions(cm),
     })
+
+
+def _descriptions(codebase_map: dict) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for key, raw in (codebase_map.get("objects", {}) or {}).items():
+        obj = raw if isinstance(raw, dict) else getattr(raw, "__dict__", {})
+        text = str(obj.get("description") or "").strip()
+        if text:
+            result[str(obj.get("uuid") or key)] = text
+    return result
 
 
 @router.get("/objects/{uuid}")
