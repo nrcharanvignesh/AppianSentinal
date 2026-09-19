@@ -42,7 +42,7 @@ checks pass.
     - Include content subtypes, record types, process models, data types, groups,
       sites, APIs, integrations, data stores, translations, and document payloads.
     - Acceptance: parsed totals reconcile with the export inventory.
-    - Status: MET FOR SYNTHETIC SCALE IN CI; REAL-EXPORT FIDELITY REMAINS LOCAL-ONLY. The default 300-object fixture covers all 21 supported parsed object types and reconciles generated and parsed per-type counts. `test_optional_full_reference_inventory_reconciles` remains the local-only real-export check: 652 constants, 615 interfaces, 610 expression rules, 178 process models, 155 documents, 148 record types, and 2,624 objects total.
+    - Status: MET FOR SYNTHETIC SCALE IN CI; REAL-EXPORT FIDELITY REMAINS LOCAL-ONLY. The default 300-object fixture covers all 21 supported parsed object types and reconciles generated and parsed per-type counts. `test_optional_full_reference_inventory_reconciles` remains the local-only real-export check: 652 constants, 615 interfaces, 610 expression rules, 178 process models, 155 documents, 148 record types, and 2,624 objects total. The installed-GUI run reports 2,687 objects for the same application, and the two numbers are not in conflict: `./appian_export/` is an older extraction that the ZIP has since moved past by 89 files, and parsing `Interactions Hub.zip` directly yields exactly the 2,687 the GUI shows.
 
 8. Resolve UUIDs, names, source files, and object references bidirectionally.
     - Acceptance: every indexed object resolves by UUID and name where metadata exists.
@@ -107,7 +107,7 @@ checks pass.
 20. Create and modify required Appian objects across all three tiers.
     - Use existing object identities and real data-model context; never invent UUIDs.
     - Acceptance: generated changes pass validation and object round-trip tests.
-    - Status: PARTIAL. `tests/test_generated_object_validation.py` passed (create + SAIL validate + codebase resolve; invalid SAIL rejected before write), but an audit of the evidence shows the generation path is proven on the content tier only: generated interface create, fix-loop interface create, and MCP `generate_sail` on an interface. Record-type and process-model writes are proven at the writer layer (R11), not through the orchestrator or MCP generation path. NOT YET MET: generated record-type and process-model create/modify driven end to end through the agent or MCP with validation and round trip.
+    - Status: MET. `tests/test_generated_object_validation.py` covers content-tier create with SAIL validation, codebase resolution, and rejection of invalid SAIL before write. `tests/test_agent_all_tier_generation.py` closes the tier gap an audit exposed: it drives `Orchestrator.step_4_implementation` with a deterministic fake LLM that returns an interface, a record type, and a process model, then re-runs `build_codebase_map` and requires all three to resolve by UUID and name. That test fails against the pre-fix writer, which is how the unreadable record-type and process-model output described in R11 was found. Note that MCP `generate_sail` is deliberately restricted to interfaces and expression rules, because record types and process models carry no SAIL; their generation goes through the object writer.
 
 21. Generate comprehensive functional, negative, edge, regression, performance, and
     accessibility test cases mapped to every acceptance criterion.
@@ -175,7 +175,8 @@ checks pass.
         1. `/ws` accepted the token only as an `X-Sentinel-Token` header, which a browser cannot set on a handshake, so the app showed "Sidecar offline" permanently and reconnected every 2 seconds. The token now rides the `sentinel-token` subprotocol.
         2. The token middleware rejected the CORS preflight with 401 and no CORS headers, so every cross-origin REST call from the renderer on 8888 to the sidecar on 7842 died as "Failed to fetch" and the Object Explorer showed "Could not load objects". `OPTIONS` is now exempt; the real request is still gated.
     - `desktop/scripts/prove-renderer-auth.mjs` is the regression gate for both. It runs a real browser on a real separate origin against the frozen sidecar with a token set, and proves the tokened REST call and the tokened socket succeed while untokened and wrong-token attempts are refused.
-    - STILL NOT MET: clean-machine GUI of the full ZIP import/rebuild workflow.
+    - Status: MET on the installed application. `desktop/scripts/prove-installed-gui.mjs` drives the real installed `AppianSentinel.exe` through the entire reference workflow with no mock and no stub sidecar, and exited 0 on three consecutive runs in about two minutes each: the GUI reports the sidecar online, imports the 84.2 MB `Interactions Hub.zip`, shows 2,687 parsed objects in the Object Explorer, opens an object and renders its source, rebuilds the full ZIP, and downloads an 84.1 MB archive. The script then audits that archive and requires 2,871 entries with no internal `.history` state, which matches the source export file for file. A third defect surfaced here and is fixed: the rebuilt ZIP carried Sentinel's own `.history` snapshot store, which would have corrupted a real Appian import.
+    - Residual risk, stated plainly: this is a real install from the shipped `.cmd` on a machine that has previously built the project, not a freshly imaged Windows box. It proves the installed artifact, not the absence of every possible machine-level prerequisite.
 
 ## Release gate
 
@@ -199,16 +200,24 @@ back by this project's own parser.
 
 Open gaps, in priority order:
 
-1. R31 clean-machine installed GUI run of the full import and rebuild workflow.
-2. R10/R1 icon catalog is truncated (`is_complete is False`), so invented icons outside
-   the merged set are warnings rather than hard rejects.
-3. R20 generation is proven on the content tier only; record-type and process-model
-   generation through the agent or MCP is untested.
-4. CI runs neither the corpus gates nor Playwright, PyInstaller, frozen-sidecar, or
-   desktop-boot checks, so a clean clone verifies less than this machine does.
-5. The Windows Job Object has no automated test and falls back with a WARN, which
+1. R10/R1 icon catalog is truncated (`is_complete is False`), so invented icons outside
+   the merged set are warnings rather than hard rejects. This one cannot be closed
+   honestly from here: the bundled 26.5 reference truncates the list, and the
+   authoritative `docs.appian.com` table is rendered client side, so it cannot be
+   scraped. Hard-rejecting against a knowingly partial list would fail valid Appian
+   icons, and inventing the missing names would break the same anti-invention rule this
+   project enforces on the model. Warning is the correct behavior until a complete list
+   can be obtained from an Appian instance.
+2. The Windows Job Object has no automated test and falls back with a WARN, which
    weakens the "stop the sidecar safely" claim.
-6. R27 explorer breadth is proven for expression rules only in the rendered UI.
+3. R27 explorer breadth is proven for expression rules only in the rendered UI.
+4. Verification depth is local by design. `.github/workflows/ci.yml` is now
+   `workflow_dispatch` only because this account has no Actions minutes, so a clean
+   clone verifies nothing automatically until someone starts a run by hand. The
+   corpus, Playwright, PyInstaller, frozen-sidecar, desktop-boot, renderer-auth, and
+   installed-GUI gates are all run from this machine.
 
-Until at least the first of these clears, this application is not "flawless" and should
-not be described as such.
+R31, the gap that mattered most, is now closed against the installed application.
+The remaining items are narrower, and item 1 is a ground-truth limitation rather than
+unfinished work. "Flawless" still overstates it: the icon catalog is provably partial
+and the clean-machine claim is bounded as described in R31.

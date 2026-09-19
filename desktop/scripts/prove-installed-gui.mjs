@@ -190,9 +190,16 @@ async function main() {
     log('ERROR', error instanceof Error ? error.message : String(error));
     return 1;
   } finally {
-    await app.close().catch(() => {});
+    // A graceful close can hang on an app holding a loaded codebase, so give it
+    // a bounded chance and fall through to the kill either way.
+    await Promise.race([
+      app.close().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 15000)),
+    ]);
     killRunningInstances();
   }
 }
 
-process.exitCode = await main();
+// Playwright's Electron handle keeps the loop alive after the app is closed, so
+// exit on the result rather than waiting for a drain that never comes.
+process.exit(await main());
