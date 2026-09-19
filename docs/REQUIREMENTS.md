@@ -102,7 +102,7 @@ checks pass.
 19. Provide the central streaming chatbot.
     - Preserve session state, reconnect safely, and show actionable failures.
     - Acceptance: chat works through WebSocket and HTTP fallback.
-    - Status: MET. `tests/test_chat_transports.py` drives both paths: WebSocket streaming via `TestClient.websocket_connect` and the `POST /api/chat` HTTP fallback.
+    - Status: MET. `tests/test_chat_transports.py` drives both paths: WebSocket streaming via `TestClient.websocket_connect` and the `POST /api/chat` HTTP fallback. Defect found and fixed here: `/ws` only accepted the token as an `X-Sentinel-Token` header, which a browser cannot set on a handshake, so the packaged desktop UI showed "Sidecar offline" permanently while REST worked and reconnected every 2 seconds. The token now rides the `sentinel-token` subprotocol, headers still work for non-browser clients, and `desktop/scripts/prove-ws-token.mjs` proves it in a real browser: the tokened socket opens and negotiates `sentinel-token`, while untokened and wrong-token sockets are refused.
 
 20. Create and modify required Appian objects across all three tiers.
     - Use existing object identities and real data-model context; never invent UUIDs.

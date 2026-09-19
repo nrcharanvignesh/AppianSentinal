@@ -1085,13 +1085,37 @@ async def fetch_ado_work_item(request: Request) -> JSONResponse:
 
 ws_router = APIRouter()
 
+WS_TOKEN_PROTOCOL = "sentinel-token"
+
+
+def _authorize_websocket(websocket: WebSocket) -> tuple[bool, str | None]:
+    """Check the desktop token and pick the subprotocol to echo back.
+
+    A browser cannot set request headers on a WebSocket handshake, so the
+    renderer sends the token as the subprotocol pair
+    ``sentinel-token, <token>``. Header clients keep working unchanged.
+    """
+    requested = [
+        value.strip()
+        for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+        if value.strip()
+    ]
+    selected = WS_TOKEN_PROTOCOL if WS_TOKEN_PROTOCOL in requested else None
+    token = os.environ.get("SENTINEL_API_TOKEN")
+    if not token:
+        return True, selected
+    supplied = websocket.headers.get("X-Sentinel-Token", "")
+    if not supplied and selected is not None:
+        offset = requested.index(WS_TOKEN_PROTOCOL) + 1
+        supplied = requested[offset] if offset < len(requested) else ""
+    return hmac.compare_digest(supplied, token), selected
+
 
 @ws_router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """Real-time chat via WebSocket."""
-    token = os.environ.get("SENTINEL_API_TOKEN")
-    supplied = websocket.headers.get("X-Sentinel-Token", "")
-    if token and not hmac.compare_digest(supplied, token):
+    authorized, subprotocol = _authorize_websocket(websocket)
+    if not authorized:
         await websocket.close(code=1008)
         return
     sid = websocket.query_params.get("session_id", "default")
@@ -1108,7 +1132,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     orchestrator: Orchestrator = session["orchestrator"]
 
     handler = ChatWebSocket(websocket, orchestrator)
-    await handler.accept()
+    await handler.accept(subprotocol=subprotocol)
     await handler.listen()
 
 

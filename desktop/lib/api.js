@@ -1,4 +1,5 @@
 const SESSION_ID = 'default';
+const WS_TOKEN_PROTOCOL = 'sentinel-token';
 
 function runtimeApi() {
   if (typeof window !== 'undefined' && window.__SENTINEL_API__) {
@@ -110,6 +111,12 @@ export const api = {
   uploadStory: (file) => api.upload('/api/story', file),
   packageFull: () => request(`/api/package?session_id=${SESSION_ID}`, { method: 'POST' }),
   wsUrl: () => `${runtimeApi().wsUrl}/ws?session_id=${SESSION_ID}`,
+  // A browser cannot set headers on a WebSocket, so the token rides along as a
+  // subprotocol instead of X-Sentinel-Token.
+  wsProtocols: () => {
+    const token = runtimeApi().token;
+    return token ? [WS_TOKEN_PROTOCOL, token] : [];
+  },
   downloadUrl: (kind) => `${runtimeApi().baseUrl}/api/${kind}?session_id=${SESSION_ID}`,
   download,
 };

@@ -33,9 +33,9 @@ class ChatWebSocket:
     # Public interface
     # ------------------------------------------------------------------
 
-    async def accept(self) -> None:
-        """Accept the WebSocket handshake."""
-        await self.ws.accept()
+    async def accept(self, subprotocol: str | None = None) -> None:
+        """Accept the WebSocket handshake, echoing any negotiated subprotocol."""
+        await self.ws.accept(subprotocol=subprotocol)
         logger.info("WebSocket connected (session %s)", self.orchestrator.state.session_id)
 
         # Register ourselves as the callback so every message the orchestrator

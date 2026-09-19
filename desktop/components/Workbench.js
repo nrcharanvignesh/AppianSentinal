@@ -166,7 +166,7 @@ export default function Workbench() {
 
     function connect() {
       if (!active) return;
-      const socket = new WebSocket(api.wsUrl());
+      const socket = new WebSocket(api.wsUrl(), api.wsProtocols());
       socketRef.current = socket;
       socket.onopen = () => setConnected(true);
       socket.onerror = () => setConnected(false);
