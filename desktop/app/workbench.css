@@ -14,7 +14,7 @@
   --focus-ui: #6bb9e8;
   --topbar-bg: #0f293b;
   --topbar-border: #28475b;
-  --font-ui: "Segoe UI", Arial, sans-serif;
+  --font-ui: var(--font-appian), "Segoe UI", Arial, sans-serif;
   --font-code: "Cascadia Mono", Consolas, monospace;
 }
 
