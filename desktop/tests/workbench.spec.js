@@ -27,6 +27,11 @@ async function stubSidecar(page, options = {}) {
     loaded = false,
     codebaseDelay = 0,
     codebaseError = '',
+    // R27 breadth: let a test describe a codebase of many object types rather
+    // than the single expression-rule shape the other tests rely on.
+    byType = null,
+    uuidToName = null,
+    objectTypeByUuid = null,
   } = typeof options === 'boolean' ? { loaded: options } : options;
   const calls = [];
   await page.routeWebSocket('**/ws**', () => {});
@@ -52,8 +57,8 @@ async function stubSidecar(page, options = {}) {
         body = loaded ? {
           app_name: 'Sentinel Demo',
           appian_version: '26.1',
-          by_type: { expression_rule: [UUID, HELPER_UUID, HELPER_UUID_2] },
-          uuid_to_name: {
+          by_type: byType || { expression_rule: [UUID, HELPER_UUID, HELPER_UUID_2] },
+          uuid_to_name: uuidToName || {
             [UUID]: 'APP_Test',
             [HELPER_UUID]: 'APP_Helper',
             [HELPER_UUID_2]: 'APP_Helper',
@@ -113,6 +118,14 @@ async function stubSidecar(page, options = {}) {
         : { preview: false, revision: 'revision-2', object_uuids: [UUID] };
     } else if (url.pathname === '/api/story') {
       body = { title: 'Uploaded story' };
+    } else if (objectTypeByUuid && url.pathname.startsWith('/api/objects/')) {
+      const uuid = url.pathname.split('/')[3];
+      body = {
+        uuid,
+        name: uuidToName?.[uuid] || uuid,
+        object_type: objectTypeByUuid[uuid],
+        definition: `-- ${objectTypeByUuid[uuid]} source for ${uuidToName?.[uuid]}`,
+      };
     }
     await route.fulfill({
       status,
@@ -580,5 +593,54 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     expect(consoleErrors).toEqual([]);
     expect(fs.existsSync(SCREENSHOT_1024)).toBeTruthy();
     expect(fs.existsSync(SCREENSHOT_1440)).toBeTruthy();
+  });
+
+  test('explorer groups every parsed object type, not just expression rules', async ({ page }) => {
+    // R27 was previously proven against a single-type codebase, so a regression
+    // in any other tier would have rendered nothing and still passed.
+    const types = {
+      constant: 'APP_MaxRetries',
+      expression_rule: 'APP_CalculateTotal',
+      integration: 'APP_PostRequest',
+      interface: 'APP_RequestForm',
+      process_model: 'APP_RequestApproval',
+      record_type: 'APP_Request',
+      site: 'APP_RequesterSite',
+    };
+    const byType = {};
+    const uuidToName = {};
+    const objectTypeByUuid = {};
+    for (const [type, name] of Object.entries(types)) {
+      const uuid = `uuid-${type}`;
+      byType[type] = [uuid];
+      uuidToName[uuid] = name;
+      objectTypeByUuid[uuid] = type;
+    }
+
+    await stubSidecar(page, { loaded: true, byType, uuidToName, objectTypeByUuid });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    const explorer = page.getByRole('complementary', { name: 'Object explorer' });
+    await expect(explorer).toBeVisible();
+
+    // The badge counts every object regardless of tier.
+    await expect(explorer.locator('.count-badge')).toHaveText(String(Object.keys(types).length));
+
+    const expectedGroups = [
+      'Constant', 'Expression Rule', 'Integration', 'Interface',
+      'Process Model', 'Record Type', 'Site',
+    ];
+    for (const label of expectedGroups) {
+      await expect(page.getByRole('treeitem', { name: new RegExp(`^${label}`) })).toBeVisible();
+    }
+    for (const name of Object.values(types)) {
+      await expect(page.getByRole('treeitem', { name, exact: true })).toBeVisible();
+    }
+
+    // Opening a non-content tier object must render its source, not blank.
+    await page.getByRole('treeitem', { name: 'APP_Request', exact: true }).click();
+    await expect(page.locator('.code-editor')).toContainText('record_type source for APP_Request');
+
+    await page.getByRole('treeitem', { name: 'APP_RequestApproval', exact: true }).click();
+    await expect(page.locator('.code-editor')).toContainText('process_model source for APP_RequestApproval');
   });
 });

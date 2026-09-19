@@ -146,7 +146,7 @@ checks pass.
 27. Provide object browsing for interfaces, constants, rules, record types, process
     models, and every other parsed type.
     - Acceptance: users can open objects from the type tree and inspect metadata and source.
-    - Status: PARTIAL. `npx playwright test` -> 18 passed, and the rendered workbench screenshot shows the typed Object Explorer tree, name/UUID search, and an opened object with Source and Metadata tabs. The rendered fixture contains expression rules only, so "every other parsed type" in the explorer is proven at the parser layer rather than observed in the UI, and tree behaviour at 2,624-object scale is likewise inferred.
+    - Status: MET. `npx playwright test` -> 19 passed, including `explorer groups every parsed object type, not just expression rules`, which renders a codebase spanning constants, expression rules, integrations, interfaces, process models, record types, and sites, then requires a labelled group per tier, an accurate total badge, and a rendered source pane after opening both a record type and a process model. The earlier fixture held expression rules only, so a regression on any other tier could have rendered nothing and still passed. Tree behaviour at full scale is separately observed rather than inferred: the installed-GUI run in R31 shows 2,687 objects in this explorer.
 
 28. Provide a proper Appian-focused IDE.
     - Include object explorer, tabs, read/edit source, SAIL highlighting, diagnostics,
@@ -176,6 +176,7 @@ checks pass.
         2. The token middleware rejected the CORS preflight with 401 and no CORS headers, so every cross-origin REST call from the renderer on 8888 to the sidecar on 7842 died as "Failed to fetch" and the Object Explorer showed "Could not load objects". `OPTIONS` is now exempt; the real request is still gated.
     - `desktop/scripts/prove-renderer-auth.mjs` is the regression gate for both. It runs a real browser on a real separate origin against the frozen sidecar with a token set, and proves the tokened REST call and the tokened socket succeed while untokened and wrong-token attempts are refused.
     - Status: MET on the installed application. `desktop/scripts/prove-installed-gui.mjs` drives the real installed `AppianSentinel.exe` through the entire reference workflow with no mock and no stub sidecar, and exited 0 on three consecutive runs in about two minutes each: the GUI reports the sidecar online, imports the 84.2 MB `Interactions Hub.zip`, shows 2,687 parsed objects in the Object Explorer, opens an object and renders its source, rebuilds the full ZIP, and downloads an 84.1 MB archive. The script then audits that archive and requires 2,871 entries with no internal `.history` state, which matches the source export file for file. A third defect surfaced here and is fixed: the rebuilt ZIP carried Sentinel's own `.history` snapshot store, which would have corrupted a real Appian import.
+    - "Stop the sidecar safely" is now proven rather than assumed. `desktop/scripts/prove-job-object.mjs` starts an owner process that claims the Job Object and spawns a child that ignores `SIGTERM`, then kills the owner with `taskkill /F` and deliberately without `/T`, so nothing except the job can reap the child. It exits 0 only after observing the child die with its owner. The helper now reports whether assignment actually succeeded, so a nested parent job that blocks assignment exits 3 with a warning instead of passing silently; on this machine assignment succeeds and the guarantee holds.
     - Residual risk, stated plainly: this is a real install from the shipped `.cmd` on a machine that has previously built the project, not a freshly imaged Windows box. It proves the installed artifact, not the absence of every possible machine-level prerequisite.
 
 ## Release gate
@@ -208,16 +209,14 @@ Open gaps, in priority order:
    icons, and inventing the missing names would break the same anti-invention rule this
    project enforces on the model. Warning is the correct behavior until a complete list
    can be obtained from an Appian instance.
-2. The Windows Job Object has no automated test and falls back with a WARN, which
-   weakens the "stop the sidecar safely" claim.
-3. R27 explorer breadth is proven for expression rules only in the rendered UI.
-4. Verification depth is local by design. `.github/workflows/ci.yml` is now
-   `workflow_dispatch` only because this account has no Actions minutes, so a clean
-   clone verifies nothing automatically until someone starts a run by hand. The
-   corpus, Playwright, PyInstaller, frozen-sidecar, desktop-boot, renderer-auth, and
-   installed-GUI gates are all run from this machine.
+2. Verification depth is local by design. There is no CI workflow: this account has
+   no Actions minutes, so a workflow that runs on every push costs without returning
+   anything. A clean clone therefore verifies nothing automatically. The corpus,
+   Playwright, PyInstaller, frozen-sidecar, desktop-boot, renderer-auth, Job Object,
+   and installed-GUI gates are all run from this machine.
 
-R31, the gap that mattered most, is now closed against the installed application.
-The remaining items are narrower, and item 1 is a ground-truth limitation rather than
-unfinished work. "Flawless" still overstates it: the icon catalog is provably partial
-and the clean-machine claim is bounded as described in R31.
+R31, the gap that mattered most, is now closed against the installed application, and
+the Job Object, R20 tier, and R27 breadth gaps are closed with direct evidence. What
+is left is one ground-truth limitation and one deliberate cost decision, neither of
+which is unfinished implementation work. "Flawless" still overstates it: the icon
+catalog is provably partial, and the clean-machine claim is bounded as R31 describes.

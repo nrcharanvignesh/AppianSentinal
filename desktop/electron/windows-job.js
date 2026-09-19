@@ -120,12 +120,16 @@ public static class AppianSentinelJob {
         job = IntPtr.Zero;
         // Nested parent jobs cannot be reassigned; Electron still boots.
         System.IO.File.WriteAllText(
-          readyPath, "READY|" + created.ToString(), System.Text.Encoding.ASCII);
+          readyPath,
+          "READY|" + created.ToString() + "|nested",
+          System.Text.Encoding.ASCII);
         WaitForSingleObject(process, INFINITE);
         return created;
       }
       System.IO.File.WriteAllText(
-        readyPath, "READY|" + created.ToString(), System.Text.Encoding.ASCII);
+        readyPath,
+        "READY|" + created.ToString() + "|assigned",
+        System.Text.Encoding.ASCII);
       WaitForSingleObject(process, INFINITE);
       return created;
     } finally {
@@ -194,11 +198,22 @@ async function startWindowsJobOwner(readyDir) {
   try {
     while (Date.now() < deadline) {
       if (existsSync(readyPath)) {
-        const [status, creation] = readFileSync(readyPath, 'ascii').trim().split('|');
+        const [status, creation, assignment] = readFileSync(readyPath, 'ascii')
+          .trim()
+          .split('|');
         if (status !== 'READY' || !/^\d+$/.test(creation || '')) {
           throw new Error('Windows Job Object helper returned invalid identity');
         }
-        return { helper, ownerCreationFileTime: creation };
+        if (assignment !== 'assigned' && assignment !== 'nested') {
+          throw new Error('Windows Job Object helper returned invalid assignment');
+        }
+        return {
+          helper,
+          ownerCreationFileTime: creation,
+          // False means a nested parent job blocked assignment, so teardown falls
+          // back to the ordinary child kill rather than the kernel guarantee.
+          assigned: assignment === 'assigned',
+        };
       }
       if (helper.exitCode !== null) {
         const detail = helperError.trim();

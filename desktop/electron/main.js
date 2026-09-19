@@ -551,7 +551,13 @@ function showStartupError(error) {
 async function bootDesktop() {
   openSplash();
   try {
-    await startWindowsJobOwner(workspacePaths.electron);
+    const job = await startWindowsJobOwner(workspacePaths.electron);
+    if (job && !job.assigned) {
+      log('WARN', 'Nested parent job blocked Job Object assignment; '
+        + 'orphaned children are not guaranteed to be reaped');
+    } else if (job) {
+      log('INFO', 'Windows Job Object active; children die with this process');
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     log('WARN', `Windows Job Object unavailable; continuing without it: ${detail}`);
