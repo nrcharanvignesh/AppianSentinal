@@ -9,7 +9,11 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
-from appian_sentinel.analyzer.llm_client import LLMClient, UnsupportedProtocolFeatureError
+from appian_sentinel.analyzer.llm_client import (
+    LLMClient,
+    LLMRequestError,
+    UnsupportedProtocolFeatureError,
+)
 from appian_sentinel.config import settings
 from appian_sentinel.tester.test_generator import TestGenerator as LLMTestGenerator
 from appian_sentinel.web import routes
@@ -78,10 +82,13 @@ async def test_openai_chat_uses_chat_completions_shape() -> None:
 
     request = captured["request"]
     payload = captured["payload"]
-    assert request.url.path == "/chat/completions"
+    assert request.url.path == "/v1/chat/completions"
     assert request.headers["authorization"] == "Bearer top-secret"
     assert payload["messages"][0]["role"] == "system"
-    assert payload["max_tokens"] == 12
+    # The gateway contract forbids these on /v1/chat/completions.
+    assert "max_tokens" not in payload
+    assert "temperature" not in payload
+    assert "response_format" not in payload
     assert result == "hello"
 
 
@@ -127,7 +134,7 @@ async def test_anthropic_chat_moves_system_and_parses_content_blocks() -> None:
             "openai",
             "openai.gpt-5",
             '{"choices":[{"delta":{"content":"hello"}}]}',
-            "/chat/completions",
+            "/v1/chat/completions",
         ),
         (
             "anthropic",
@@ -205,12 +212,45 @@ async def test_anthropic_rejects_raw_response_format_precisely() -> None:
 
     with pytest.raises(
         UnsupportedProtocolFeatureError,
-        match="Anthropic protocol does not support response_format",
+        match="gateway contract forbids response_format",
     ):
         await client.chat(
             [{"role": "user", "content": "Hi"}],
             response_format={"type": "json_object"},
         )
+
+
+@pytest.mark.asyncio
+async def test_failed_call_reports_the_upstream_reason_not_only_a_status() -> None:
+    """A bare status code cannot distinguish a bad path from a rejected field."""
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"message": "model bedrock.anthropic.claude-opus-4-8 not found"}},
+        )
+
+    settings.llm_protocol = "openai"
+    client = LLMClient(httpx.MockTransport(handler))
+
+    with pytest.raises(LLMRequestError) as caught:
+        await client.chat([{"role": "user", "content": "Hi"}], model="openai.gpt-5")
+
+    message = str(caught.value)
+    assert "claude-opus-4-8 not found" in message
+    assert "HTTP 400" in message
+    # The URL matters: a wrong path is the most common cause of a 4xx here.
+    assert "/v1/chat/completions" in message
+
+
+@pytest.mark.asyncio
+async def test_failed_call_without_json_body_still_reports_something_usable() -> None:
+    settings.llm_protocol = "openai"
+    client = LLMClient(
+        httpx.MockTransport(lambda _request: httpx.Response(502, text="Bad Gateway"))
+    )
+
+    with pytest.raises(LLMRequestError, match="Bad Gateway"):
+        await client.chat([{"role": "user", "content": "Hi"}], model="openai.gpt-5")
 
 
 @pytest.mark.asyncio

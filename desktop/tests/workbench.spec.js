@@ -32,6 +32,9 @@ async function stubSidecar(page, options = {}) {
     byType = null,
     uuidToName = null,
     objectTypeByUuid = null,
+    models = null,
+    modelsError = '',
+    settingsTestError = '',
   } = typeof options === 'boolean' ? { loaded: options } : options;
   const calls = [];
   await page.routeWebSocket('**/ws**', () => {});
@@ -116,6 +119,16 @@ async function stubSidecar(page, options = {}) {
       body = routeCall.body?.preview
         ? { preview: true, diff: { [UUID]: '- old test\n+ Generated test\n' } }
         : { preview: false, revision: 'revision-2', object_uuids: [UUID] };
+    } else if (url.pathname === '/api/settings/models') {
+      if (modelsError) {
+        status = 502;
+        body = { status: 'error', message: modelsError, models: [] };
+      } else {
+        body = { status: 'ok', models: models || [] };
+      }
+    } else if (url.pathname === '/api/settings/test' && settingsTestError) {
+      status = 502;
+      body = { status: 'error', message: settingsTestError };
     } else if (url.pathname === '/api/story') {
       body = { title: 'Uploaded story' };
     } else if (objectTypeByUuid && url.pathname.startsWith('/api/objects/')) {
@@ -410,9 +423,11 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await expect(page.getByRole('button', { name: 'Preview selected' })).toBeDisabled();
     await page.getByRole('tab', { name: 'History' }).click();
     await expect(page.getByText('History disabled: load an export first.')).toBeVisible();
+    // Settings is the exception: testing and saving the connection are the
+    // recovery path, so gating them on being online would trap the operator.
     await page.getByRole('tab', { name: 'Settings' }).click();
-    await expect(page.getByRole('button', { name: 'Test' })).toBeDisabled();
-    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Test' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });
 
@@ -593,6 +608,53 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     expect(consoleErrors).toEqual([]);
     expect(fs.existsSync(SCREENSHOT_1024)).toBeTruthy();
     expect(fs.existsSync(SCREENSHOT_1440)).toBeTruthy();
+  });
+
+  test('model fields are pickers fed by the gateway, and degrade to text', async ({ page }) => {
+    const models = [
+      'bedrock.anthropic.claude-sonnet-5',
+      'bedrock.anthropic.claude-opus-5',
+      'azure.gpt-5.4',
+    ];
+    await stubSidecar(page, { loaded: true, models });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('tab', { name: 'Settings' }).click();
+
+    const primary = page.getByLabel('Primary model');
+    await expect(primary).toHaveRole('combobox');
+    for (const model of models) {
+      await expect(primary.locator(`option[value="${model}"]`)).toHaveCount(1);
+    }
+    await primary.selectOption('azure.gpt-5.4');
+    await expect(primary).toHaveValue('azure.gpt-5.4');
+  });
+
+  test('an unavailable model list degrades to a text field with the reason', async ({ page }) => {
+    // A gateway that cannot list models must not lock the operator out.
+    await stubSidecar(page, {
+      loaded: true,
+      modelsError: 'HTTP 502 from gateway: upstream refused',
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('tab', { name: 'Settings' }).click();
+
+    await expect(page.getByLabel('Primary model')).toHaveRole('textbox');
+    await expect(page.getByText('upstream refused')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
+  });
+
+  test('a failed connection test shows the reason, not just the status', async ({ page }) => {
+    await stubSidecar(page, {
+      loaded: true,
+      settingsTestError: 'HTTP 404 from https://gw/v1/chat/completions: route not found',
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('tab', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: 'Test' }).click();
+
+    // The old client dropped the body and rendered "502 Bad Gateway".
+    await expect(page.getByText('route not found')).toBeVisible();
+    await expect(page.getByText('Bad Gateway')).toHaveCount(0);
   });
 
   test('explorer groups every parsed object type, not just expression rules', async ({ page }) => {

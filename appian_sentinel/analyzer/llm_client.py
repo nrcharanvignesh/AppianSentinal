@@ -128,6 +128,30 @@ class LLMClient:
         )
 
     @staticmethod
+    def _error_detail(response: httpx.Response) -> str:
+        """Return the upstream reason for a failed call.
+
+        Without this an operator sees only a status code, which is the same for
+        a wrong path, a rejected field, and an unknown model.
+        """
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                error = data.get("error")
+                message = ""
+                if isinstance(error, dict):
+                    message = str(error.get("message") or "")
+                elif isinstance(error, str):
+                    message = error
+                message = message or str(data.get("message") or data.get("detail") or "")
+                if message:
+                    return message[:400]
+        except ValueError:
+            pass
+        body = (response.text or "").strip().replace("\n", " ")
+        return body[:400] if body else "no response body"
+
+    @staticmethod
     def _headers() -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if settings.litellm_api_key:
@@ -136,7 +160,10 @@ class LLMClient:
 
     @staticmethod
     def _url(protocol: LLMProtocol) -> str:
-        path = "/chat/completions" if protocol == "openai" else "/v1/messages"
+        # The gateway publishes every route under /v1 (see docs/LLM-CONTRACT.md).
+        # The base URL is an origin, so a pasted /v1 suffix is normalised away
+        # rather than doubled.
+        path = "/v1/chat/completions" if protocol == "openai" else "/v1/messages"
         base_url = settings.litellm_base_url.rstrip("/")
         if base_url.endswith("/v1"):
             base_url = base_url[:-3]
@@ -171,31 +198,29 @@ class LLMClient:
         protocol: LLMProtocol,
         model: str,
         messages: list[Message],
-        temperature: float,
         max_tokens: int,
         response_format: dict[str, Any] | None,
         stream: bool,
     ) -> dict[str, Any]:
+        # The gateway contract forbids temperature and response_format on every
+        # route, and forbids max_tokens everywhere except /v1/messages, where it
+        # is required. Sending a forbidden field is rejected upstream, which is
+        # why these are dropped rather than passed through.
+        if response_format is not None:
+            raise UnsupportedProtocolFeatureError(
+                "The gateway contract forbids response_format; "
+                "use chat_structured, which constrains output by prompt instead."
+            )
         if protocol == "openai":
             payload: dict[str, Any] = {
                 "model": model,
                 "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
             }
-            if response_format is not None:
-                payload["response_format"] = response_format
         else:
-            if response_format is not None:
-                raise UnsupportedProtocolFeatureError(
-                    "Anthropic protocol does not support response_format; "
-                    "use chat_structured for schema validation."
-                )
             system, conversation = self._anthropic_messages(messages)
             payload = {
                 "model": model,
                 "messages": conversation,
-                "temperature": temperature,
                 "max_tokens": max_tokens,
             }
             if system is not None:
@@ -225,7 +250,8 @@ class LLMClient:
                     continue
                 if response.is_error:
                     raise LLMRequestError(
-                        f"{protocol} request failed with HTTP {response.status_code}."
+                        f"HTTP {response.status_code} from {self._url(protocol)}: "
+                        f"{self._error_detail(response)}"
                     )
                 try:
                     data = response.json()
@@ -281,7 +307,6 @@ class LLMClient:
             protocol,
             resolved_model,
             messages,
-            temperature,
             max_tokens or settings.sentinel_max_tokens,
             response_format,
             False,
@@ -301,20 +326,10 @@ class LLMClient:
     ) -> T:
         """Chat completion with JSON structured output parsed into a Pydantic model.
 
-        Uses ``response_format`` with a JSON Schema derived from the provided
-        Pydantic model so the LLM returns well-formed JSON that can be parsed
-        directly.
+        The gateway contract forbids ``response_format``, so the schema is
+        carried in the prompt and the reply is validated on the way back.
         """
         schema = response_schema.model_json_schema()
-
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": response_schema.__name__,
-                "strict": True,
-                "schema": schema,
-            },
-        }
 
         json_instruction = (
             f"\n\nYou MUST respond with a JSON object that conforms to this schema:\n"
@@ -330,13 +345,10 @@ class LLMClient:
         else:
             augmented_messages.append({"role": "user", "content": json_instruction})
 
-        resolved_model = self._resolve_model(model)
-        protocol = self.resolve_protocol(resolved_model)
         raw = await self.chat(
             augmented_messages,
-            model=resolved_model,
+            model=self._resolve_model(model),
             temperature=temperature,
-            response_format=response_format if protocol == "openai" else None,
         )
 
         cleaned = raw.strip()
@@ -366,7 +378,6 @@ class LLMClient:
             protocol,
             resolved_model,
             messages,
-            temperature,
             max_tokens or settings.sentinel_max_tokens,
             None,
             True,
@@ -379,8 +390,10 @@ class LLMClient:
                 json=payload,
             ) as response:
                 if response.is_error:
+                    await response.aread()
                     raise LLMRequestError(
-                        f"{protocol} stream request failed with HTTP {response.status_code}."
+                        f"HTTP {response.status_code} from {self._url(protocol)}: "
+                        f"{self._error_detail(response)}"
                     )
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
@@ -402,6 +415,55 @@ class LLMClient:
                         ) from exc
                     if text:
                         yield str(text)
+
+    async def list_models(self, timeout: float = 30.0) -> list[str]:
+        """Return the model ids the gateway advertises, sorted.
+
+        The contract publishes `/v1/models`, but some gateway builds expose the
+        list at `/models`, so both are tried before giving up.
+        """
+        base_url = settings.litellm_base_url.rstrip("/")
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+
+        last_error = "no base URL configured" if not base_url else ""
+        for path in ("/v1/models", "/models"):
+            try:
+                async with httpx.AsyncClient(
+                    transport=self._transport,
+                    timeout=timeout,
+                ) as client:
+                    response = await client.get(
+                        f"{base_url}{path}",
+                        headers=self._headers(),
+                    )
+                if response.is_error:
+                    last_error = (
+                        f"HTTP {response.status_code} from {base_url}{path}: "
+                        f"{self._error_detail(response)}"
+                    )
+                    continue
+                payload = response.json()
+            except (httpx.TimeoutException, httpx.TransportError, ValueError) as exc:
+                last_error = f"{type(exc).__name__} from {base_url}{path}"
+                continue
+
+            entries = payload.get("data") if isinstance(payload, dict) else payload
+            if not isinstance(entries, list):
+                last_error = f"{base_url}{path} returned no model list"
+                continue
+            ids = {
+                str(entry.get("id") or entry.get("model_name") or "").strip()
+                if isinstance(entry, dict)
+                else str(entry).strip()
+                for entry in entries
+            }
+            models = sorted(model for model in ids if model)
+            if models:
+                return models
+            last_error = f"{base_url}{path} returned an empty model list"
+
+        raise LLMRequestError(last_error or "model list unavailable")
 
     async def count_tokens_approx(self, text: str) -> int:
         """Return an approximate token count using the chars/4 heuristic."""

@@ -1284,6 +1284,28 @@ async def update_settings(request: Request) -> JSONResponse:
     })
 
 
+@router.get("/settings/models")
+async def list_settings_models() -> JSONResponse:
+    """List the gateway's model ids so the UI can offer a picker.
+
+    Typing a model id by hand is the main source of "model not found", so the
+    UI needs the real list. A failure here is reported rather than hidden: the
+    picker falls back to free text and shows why.
+    """
+    from appian_sentinel.analyzer.llm_client import llm as _llm_singleton
+
+    try:
+        models = await _llm_singleton.list_models()
+    except Exception as exc:
+        reason = _mask_secrets(str(exc)).strip() or type(exc).__name__
+        logger.error("Model list fetch failed: %s", reason)
+        return JSONResponse(
+            status_code=502,
+            content={"status": "error", "message": reason, "models": []},
+        )
+    return JSONResponse({"status": "ok", "models": models})
+
+
 @router.get("/settings/test")
 async def test_settings() -> JSONResponse:
     """Test the LLM connection by making a simple chat completion call."""
@@ -1337,11 +1359,14 @@ async def test_settings() -> JSONResponse:
             detail=f"Settings connection test failed: model {model}: {_mask_secrets(str(exc))}",
             result="failed",
         )
+        # The caller prefixes "Connection failed", so send only the reason. An
+        # empty str(exc) is common for transport errors, hence the type fallback.
+        reason = _mask_secrets(str(exc)).strip() or type(exc).__name__
         return JSONResponse(
             status_code=502,
             content={
                 "status": "error",
-                "message": f"Connection failed: {_mask_secrets(str(exc))}",
+                "message": f"{reason} (model {model})",
             },
         )
 

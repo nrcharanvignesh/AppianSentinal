@@ -28,9 +28,11 @@ async function request(path, options = {}) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const detail = body.detail;
+    // Some routes report the cause as `message` rather than `detail`. Without
+    // this the UI replaced a real reason with a bare "502 Bad Gateway".
     const message = typeof detail === 'string'
       ? detail
-      : detail?.reason || `${response.status} ${response.statusText}`;
+      : detail?.reason || body.message || `${response.status} ${response.statusText}`;
     throw new Error(message);
   }
   if (response.status === 204) return null;
@@ -101,6 +103,7 @@ export const api = {
   settings: () => request('/api/settings'),
   saveSettings: (settings) => request('/api/settings', json(settings)),
   testSettings: () => request('/api/settings/test'),
+  listModels: () => request('/api/settings/models'),
   ado: (id) => request(`/api/ado/workitem?session_id=${SESSION_ID}`, json({ id })),
   chat: (message) => request(`/api/chat?session_id=${SESSION_ID}`, json({ message })),
   upload: (endpoint, file) => {

@@ -493,6 +493,7 @@ export default function Workbench() {
           onUploadStory={api.uploadStory}
           onSaveSettings={saveSettings}
           onTestSettings={testSettings}
+          onListModels={api.listModels}
         />
       </div>
       <footer className="statusbar">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const STEPS = [
   'Requirement Analysis', 'Codebase Analysis', 'Design', 'Implementation',
@@ -9,6 +9,34 @@ const STEPS = [
 ];
 
 const MODES = ['Chat', 'ADO', 'Settings', 'Progress'];
+
+// A dropdown when the gateway list is available, a text box when it is not.
+// A configured model that the gateway no longer lists still has to be visible,
+// so it is added to the options rather than silently dropped.
+function ModelField({ label, value, models, onChange }) {
+  if (!models.length) {
+    return (
+      <label>
+        {label}
+        <input value={value} onChange={onChange} placeholder="bedrock.anthropic.claude-sonnet-5" />
+      </label>
+    );
+  }
+  const options = models.includes(value) || !value ? models : [value, ...models];
+  return (
+    <label>
+      {label}
+      <select value={value} onChange={onChange}>
+        {!value && <option value="">Select a model</option>}
+        {options.map((model) => (
+          <option key={model} value={model}>
+            {models.includes(model) ? model : `${model} (not listed by gateway)`}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 export default function AssistantPanel({
   messages,
@@ -22,12 +50,15 @@ export default function AssistantPanel({
   onUploadStory,
   onSaveSettings,
   onTestSettings,
+  onListModels,
 }) {
   const [draft, setDraft] = useState('');
   const [mode, setMode] = useState('Chat');
   const [adoId, setAdoId] = useState('');
   const [adoState, setAdoState] = useState('');
   const [form, setForm] = useState(settings);
+  const [models, setModels] = useState([]);
+  const [modelsState, setModelsState] = useState('');
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -35,6 +66,24 @@ export default function AssistantPanel({
   }, [messages]);
 
   useEffect(() => setForm(settings), [settings]);
+
+  const loadModels = useCallback(async () => {
+    if (!onListModels) return;
+    setModelsState('Loading models...');
+    try {
+      const result = await onListModels();
+      setModels(result.models || []);
+      setModelsState(result.models?.length ? '' : 'The gateway returned no models.');
+    } catch (error) {
+      // Keep the fields editable: a picker that cannot load must not block work.
+      setModels([]);
+      setModelsState(`Model list unavailable: ${error.message}`);
+    }
+  }, [onListModels]);
+
+  useEffect(() => {
+    if (mode === 'Settings') loadModels();
+  }, [mode, loadModels]);
 
   function submit() {
     const value = draft.trim();
@@ -143,17 +192,34 @@ export default function AssistantPanel({
               <option value="auto">Auto</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
             </select>
           </label>
-          <label>Primary model<input value={form.primary_model || ''} onChange={setField('primary_model')} /></label>
-          <label>Fast model<input value={form.fast_model || ''} onChange={setField('fast_model')} /></label>
+          <ModelField
+            label="Primary model"
+            value={form.primary_model || ''}
+            models={models}
+            onChange={setField('primary_model')}
+          />
+          <ModelField
+            label="Fast model"
+            value={form.fast_model || ''}
+            models={models}
+            onChange={setField('fast_model')}
+          />
+          {modelsState && (
+            <p className="form-state" aria-live="polite">
+              {modelsState}{' '}
+              <button type="button" className="link-button" onClick={loadModels}>Retry</button>
+            </p>
+          )}
           <label>ADO organization<input value={form.ado_org || ''} onChange={setField('ado_org')} /></label>
           <label>ADO project<input value={form.ado_project || ''} onChange={setField('ado_project')} /></label>
           <label>ADO PAT<input type="password" value={form.ado_pat || ''} onChange={setField('ado_pat')} /></label>
           <div className="form-actions">
+            {/* Deliberately not gated on the socket: testing and saving the
+                connection are how an operator recovers from being offline. */}
             <button
               type="button"
               className="secondary-button"
-              disabled={!connected}
-              title={connected ? 'Test provider settings' : 'Sidecar connection required'}
+              title="Save these settings and test the provider connection"
               onClick={() => onTestSettings(form)}
             >
               Test
@@ -161,8 +227,7 @@ export default function AssistantPanel({
             <button
               type="button"
               className="primary-button"
-              disabled={!connected}
-              title={connected ? 'Save provider settings' : 'Sidecar connection required'}
+              title="Save provider settings"
               onClick={() => onSaveSettings(form)}
             >
               Save
