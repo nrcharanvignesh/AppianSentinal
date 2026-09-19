@@ -278,61 +278,52 @@ def analyze_sail(
         ))
 
     icon_catalog = load_icon_catalog()
-    rich_icons = icon_catalog.rich_text_aliases
-    system_icons = icon_catalog.system_icon_keys
     for node in visitor.component_calls:
         literal = _literal_icon_argument(node)
         if literal is None:
             continue
         name = node.name.casefold()
-        if name == "richtexticon" and rich_icons and literal.value not in rich_icons:
+        if name == "richtexticon":
+            valid_icons = icon_catalog.rich_text_aliases
+            code = "SAIL041"
+            kind = "rich-text icon alias"
+        elif name == "iconindicator":
+            valid_icons = icon_catalog.indicator_icon_keys
+            code = "SAIL042"
+            kind = "indicator icon key"
+        elif name == "iconnewsevent":
+            valid_icons = icon_catalog.news_event_icon_keys
+            code = "SAIL042"
+            kind = "news-event icon key"
+        else:
+            continue
+        if valid_icons and literal.value not in valid_icons:
             matches = get_close_matches(
                 literal.value,
-                rich_icons,
+                valid_icons,
                 n=1,
                 cutoff=_ICON_NEAR_MISS_CUTOFF,
             )
             if matches:
                 diagnostics.append(SailDiagnostic(
-                    "SAIL041",
+                    code,
                     (
-                        f"Unknown rich-text icon alias '{literal.value}'; "
+                        f"Unknown {kind} '{literal.value}'; "
                         f"did you mean '{matches[0]}'?"
                     ),
                     DiagnosticSeverity.ERROR,
                     _node_range(source, literal),
                 ))
-            else:
+            elif icon_catalog.is_complete:
                 diagnostics.append(SailDiagnostic(
-                    "SAIL041",
-                    f"icon '{literal.value}' {_UNVERIFIABLE_ICON}",
-                    DiagnosticSeverity.WARNING,
-                    _node_range(source, literal),
-                ))
-        elif (
-            name in {"iconindicator", "iconnewsevent"}
-            and system_icons
-            and literal.value not in system_icons
-        ):
-            matches = get_close_matches(
-                literal.value,
-                system_icons,
-                n=1,
-                cutoff=_ICON_NEAR_MISS_CUTOFF,
-            )
-            if matches:
-                diagnostics.append(SailDiagnostic(
-                    "SAIL042",
-                    (
-                        f"Unknown system icon key '{literal.value}'; "
-                        f"did you mean '{matches[0]}'?"
-                    ),
+                    code,
+                    f"Unknown {kind} '{literal.value}'.",
                     DiagnosticSeverity.ERROR,
                     _node_range(source, literal),
                 ))
             else:
                 diagnostics.append(SailDiagnostic(
-                    "SAIL042",
+                    code,
                     f"icon '{literal.value}' {_UNVERIFIABLE_ICON}",
                     DiagnosticSeverity.WARNING,
                     _node_range(source, literal),

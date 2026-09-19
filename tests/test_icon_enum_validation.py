@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from appian_sentinel.knowledge.icon_catalog import (
     CORPUS_OBSERVED_RICH_TEXT_ALIASES,
-    CORPUS_OBSERVED_SYSTEM_ICON_KEYS,
     IS_TRUNCATED,
     load_icon_catalog,
     rich_text_icon_aliases,
@@ -15,9 +14,9 @@ from appian_sentinel.parser.sail_diagnostics import (
     analyze_sail,
 )
 
-_EXPECTED_RICH_SCRAPE_COUNT = 47
-_EXPECTED_INDICATOR_KEY_COUNT = 19
-_EXPECTED_NEWS_KEY_COUNT = 13
+_EXPECTED_RICH_ICON_COUNT = 1133
+_EXPECTED_INDICATOR_KEY_COUNT = 43
+_EXPECTED_NEWS_KEY_COUNT = 127
 
 
 def _codes(source: str) -> list[tuple[str, DiagnosticSeverity]]:
@@ -32,34 +31,32 @@ def _icon_findings(source: str) -> list[tuple[str, DiagnosticSeverity, str]]:
     ]
 
 
-def test_catalog_is_truncated_partial_scrape() -> None:
+def test_catalog_contains_complete_official_icon_tables() -> None:
     catalog = load_icon_catalog()
     aliases = rich_text_icon_aliases()
     keys = system_icon_keys()
     assert catalog.archive_available is True
-    assert catalog.is_complete is False
-    assert catalog.is_truncated is True
-    assert IS_TRUNCATED is True
+    assert catalog.is_complete is True
+    assert catalog.is_truncated is False
+    assert IS_TRUNCATED is False
     assert catalog.rich_text_covered_prefix == "a"
-    assert catalog.rich_text_scrape_count == _EXPECTED_RICH_SCRAPE_COUNT
+    assert catalog.rich_text_scrape_count == _EXPECTED_RICH_ICON_COUNT
     assert catalog.indicator_key_count == _EXPECTED_INDICATOR_KEY_COUNT
     assert catalog.news_event_key_count == _EXPECTED_NEWS_KEY_COUNT
     assert "address-book" in aliases
     assert "ADD" in keys
-    assert "zoom-in" not in aliases
+    assert "yin-yang" in aliases
+    assert "ZOOM_IN" in catalog.news_event_icon_keys
     assert "address-book" not in keys
     assert "ADD" not in aliases
 
 
-def test_corpus_observed_icons_are_recognized_but_catalog_remains_partial() -> None:
+def test_corpus_observed_deprecated_aliases_remain_recognized() -> None:
     catalog = load_icon_catalog()
     assert CORPUS_OBSERVED_RICH_TEXT_ALIASES <= catalog.rich_text_aliases
-    assert CORPUS_OBSERVED_SYSTEM_ICON_KEYS <= catalog.system_icon_keys
-    assert catalog.is_complete is False
+    assert catalog.is_complete is True
     for alias in CORPUS_OBSERVED_RICH_TEXT_ALIASES:
         assert _icon_findings(f'a!richTextIcon(icon: "{alias}")') == []
-    for key in CORPUS_OBSERVED_SYSTEM_ICON_KEYS:
-        assert _icon_findings(f'a!iconIndicator(icon: "{key}")') == []
 
 
 def test_valid_rich_text_alias_has_no_icon_diagnostic() -> None:
@@ -83,28 +80,31 @@ def test_underscore_near_miss_is_error_with_suggestion() -> None:
     assert "address-book" in findings[0][2]
 
 
-def test_unknown_plausible_icon_is_warning_not_error() -> None:
-    findings = _icon_findings('a!richTextIcon(icon: "zoom-in")')
+def test_unknown_icon_is_rejected_from_complete_catalog() -> None:
+    findings = _icon_findings(
+        'a!richTextIcon(icon: "definitely-not-an-appian-icon")',
+    )
     assert len(findings) == 1
     code, severity, message = findings[0]
     assert code == "SAIL041"
-    assert severity == DiagnosticSeverity.WARNING
-    assert severity != DiagnosticSeverity.ERROR
-    assert "truncated" in message
-    assert analyze_sail('a!richTextIcon(icon: "zoom-in")').errors == []
+    assert severity == DiagnosticSeverity.ERROR
+    assert "Unknown rich-text icon alias" in message
+    assert analyze_sail(
+        'a!richTextIcon(icon: "definitely-not-an-appian-icon")',
+    ).errors
 
 
 def test_valid_system_key_has_no_icon_diagnostic() -> None:
     assert _icon_findings('a!iconIndicator(icon: "ADD")') == []
-    assert _icon_findings('a!iconNewsEvent(icon: "ADD")') == []
+    assert _icon_findings('a!iconNewsEvent(icon: "AIRPLANE")') == []
 
 
-def test_unknown_system_key_is_warning_not_error() -> None:
+def test_unknown_system_key_is_error() -> None:
     findings = _icon_findings('a!iconIndicator(icon: "BOGUS_KEY")')
     assert len(findings) == 1
     assert findings[0][0] == "SAIL042"
-    assert findings[0][1] == DiagnosticSeverity.WARNING
-    assert analyze_sail('a!iconIndicator(icon: "BOGUS_KEY")').errors == []
+    assert findings[0][1] == DiagnosticSeverity.ERROR
+    assert analyze_sail('a!iconIndicator(icon: "BOGUS_KEY")').errors
 
 
 def test_dynamic_icon_argument_is_not_flagged() -> None:
@@ -118,8 +118,8 @@ def test_namespaces_do_not_cross_validate() -> None:
     system_as_rich = _icon_findings('a!richTextIcon(icon: "ADD")')
     assert rich_as_system[0][0] == "SAIL042"
     assert system_as_rich[0][0] == "SAIL041"
-    assert all(item[1] == DiagnosticSeverity.WARNING for item in rich_as_system)
-    assert all(item[1] == DiagnosticSeverity.WARNING for item in system_as_rich)
+    assert all(item[1] == DiagnosticSeverity.ERROR for item in rich_as_system)
+    assert all(item[1] == DiagnosticSeverity.ERROR for item in system_as_rich)
     extra = [code for code, _severity in _codes('a!iconIndicator(icon: "address-book")') if code == "SAIL041"]
     assert extra == []
 

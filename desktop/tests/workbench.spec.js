@@ -165,6 +165,16 @@ async function openWorkbench(page, loaded = false) {
   return calls;
 }
 
+// A click that lands before React hydrates is swallowed: the tab takes focus
+// but never becomes selected. Retry until the selection actually moves.
+async function openTab(page, name) {
+  const tab = page.getByRole('tab', { name });
+  await expect(async () => {
+    await tab.click();
+    await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 1000 });
+  }).toPass({ timeout: 15000 });
+}
+
 async function visibleFocus(page) {
   return page.evaluate(() => {
     const element = document.activeElement;
@@ -428,7 +438,7 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await expect(page.getByText('History disabled: load an export first.')).toBeVisible();
     // Settings is the exception: testing and saving the connection are the
     // recovery path, so gating them on being online would trap the operator.
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    await openTab(page, 'Settings');
     await expect(page.getByRole('button', { name: 'Test', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
   });
@@ -623,7 +633,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     ];
     await stubSidecar(page, { loaded: true, models });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    await openTab(page, 'Settings');
 
     const primary = page.getByLabel('Primary model');
     await expect(primary).toHaveRole('combobox');
@@ -641,7 +651,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
       modelsError: 'HTTP 502 from gateway: upstream refused',
     });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    await openTab(page, 'Settings');
 
     await expect(page.getByLabel('Primary model')).toHaveRole('textbox');
     await expect(page.getByText('upstream refused')).toBeVisible();
@@ -657,7 +667,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
       settingsTestError: 'HTTP 404 from https://gw/v1/chat/completions: route not found',
     });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await page.getByRole('tab', { name: 'Settings' }).click();
+    await openTab(page, 'Settings');
     await expect(page.getByLabel('Primary model')).toHaveRole('combobox');
     // exact: the Build grid renders object names as buttons, and APP_Test
     // would otherwise match this substring.

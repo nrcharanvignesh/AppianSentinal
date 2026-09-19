@@ -29,7 +29,7 @@ checks pass.
 5. Establish repository and verification foundations.
     - Add a safe Git baseline, automated tests, fixtures, linting, and build checks.
     - Acceptance: clean checkout can run all checks with documented commands.
-    - Status: MET. Root `README.md` documents commands that exited 0 here; `.github/workflows/ci.yml` runs install, ruff, and pytest. The earlier `pip install -e .` break is fixed: `build-backend` is now `setuptools.build_meta` with package discovery scoped to `appian_sentinel*`, and `python -m pip install -e . --no-deps --dry-run` exits 0 ("Would install appian-sentinel-0.1.0"). Doc drift found and fixed here: `README.md` still described the editable install as broken and quoted a stale 172-test count. Residual: corpus gates skip without `./appian_export/`, and CI does not run the Playwright, PyInstaller, frozen-sidecar, or desktop-boot gates.
+    - Status: MET. Root `README.md` documents the local commands that exited 0 here. The earlier `pip install -e .` break is fixed: `build-backend` is now `setuptools.build_meta` with package discovery scoped to `appian_sentinel*`, and `python -m pip install -e . --no-deps --dry-run` exits 0 ("Would install appian-sentinel-0.1.0"). Per user direction, no CI workflow is committed because this account has no Actions minutes or Git LFS storage. Residual: corpus gates skip without `./appian_export/`; Playwright, PyInstaller, frozen-sidecar, desktop-boot, renderer-auth, Job Object, and installed-GUI gates are local commands.
 
 ## Wave 1: Appian code intelligence
 
@@ -57,7 +57,7 @@ checks pass.
     - Reject invented functions, parameters, enum values, icons, UUIDs, invalid
       nesting, invalid operators, and undeclared rule inputs.
     - Acceptance: known-invalid fixtures fail with line and column diagnostics.
-    - Status: PARTIAL. Icon validation merges the truncated Appian scrape with 75 corpus-observed names while keeping `is_complete is False`; reference-export coverage improved from 5/75 known (70 unknown, 263 occurrences) to 75/75 known (0 unknown). `tests/test_icon_enum_validation.py` passed 11 tests and the full suite passed 202 tests with 2 skipped.
+    - Status: MET. The official Appian 26.8 documentation tables are bundled as 1,127 standard aliases, 43 indicator keys, and 127 news-event keys. Six deprecated standard aliases observed in the real export remain accepted. Literal keys are validated against the correct namespace and invented keys are errors; dynamic expressions are left to Appian runtime evaluation. `tests/test_icon_enum_validation.py` passed 11 tests, and the full suite passed 228 tests with 2 corpus-dependent skips.
 
 11. Read and write all required Appian object tiers.
     - Support content objects, record types, process models, and their metadata.
@@ -146,19 +146,19 @@ checks pass.
 27. Provide object browsing for interfaces, constants, rules, record types, process
     models, and every other parsed type.
     - Acceptance: users can open objects from the type tree and inspect metadata and source.
-    - Status: MET. `npx playwright test` -> 19 passed, including `explorer groups every parsed object type, not just expression rules`, which renders a codebase spanning constants, expression rules, integrations, interfaces, process models, record types, and sites, then requires a labelled group per tier, an accurate total badge, and a rendered source pane after opening both a record type and a process model. The earlier fixture held expression rules only, so a regression on any other tier could have rendered nothing and still passed. Tree behaviour at full scale is separately observed rather than inferred: the installed-GUI run in R31 shows 2,687 objects in this explorer.
+    - Status: MET. `npx playwright test` passed 27 tests, including `explorer groups every parsed object type, not just expression rules`, which renders a codebase spanning constants, expression rules, integrations, interfaces, process models, record types, and sites, then requires a labelled group per tier, an accurate total badge, and a rendered source pane after opening both a record type and a process model. Tree behaviour at full scale is separately observed rather than inferred: the installed-GUI run in R31 shows 2,687 objects in this explorer.
 
 28. Provide a proper Appian-focused IDE.
     - Include object explorer, tabs, read/edit source, SAIL highlighting, diagnostics,
       symbols, references, dependency views, copy, diff, save, undo, and test panels.
     - Acceptance: keyboard and mouse workflows pass rendered UI tests.
-    - Status: MET. All six code-intelligence features are implemented with no new runtime dependency: SAIL highlighting, inline diagnostic markers with clickable Problems rows, symbol outline, cross-object navigation with an explicit chooser for ambiguous names, inbound/outbound dependency lists, and undo/redo. Verified by `npx playwright test` (12 passed) plus direct screenshot inspection: squiggles land on the invalid `==` operator and a single-quoted string, and the Outline separates Local, Rule input, and Component with line numbers. The highlighter token set is generated from the merged catalog (669 callables), not the 589-name archive subset, so the editor highlights exactly what the validator accepts.
+    - Status: MET. All six code-intelligence features are implemented with no new runtime dependency: SAIL highlighting, inline diagnostic markers with clickable Problems rows, symbol outline, cross-object navigation with an explicit chooser for ambiguous names, inbound/outbound dependency lists, and undo/redo. Verified by the green 27-test Playwright suite plus direct screenshot inspection: squiggles land on the invalid `==` operator and a single-quoted string, and the Outline separates Local, Rule input, and Component with line numbers. The highlighter token set is generated from the merged catalog (669 callables), not the 589-name archive subset, so the editor highlights exactly what the validator accepts.
 
 29. Match Appian's current design language closely.
     - Use Appian-style information hierarchy, navigation, density, controls, color,
       typography, focus behavior, loading, empty, and error states.
     - Acceptance: rendered desktop views pass the visual acceptance checklist.
-    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. MUI dark mode is the default, light mode persists across reloads, and both use the supplied product icon. Explorer, assistant, and results regions resize by pointer or keyboard and persist their dimensions. `npx playwright test` passed 18 tests, including both rendered themes, visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
+    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. MUI dark mode is the default, light mode persists across reloads, and both use the supplied product icon. Explorer, assistant, and results regions resize by pointer or keyboard and persist their dimensions. `npx playwright test` passed 27 tests, including both rendered themes, visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
 
 30. Show progress for upload, parsing, AI calls, all workflow steps, test runs,
     packaging, and downloads.
@@ -170,12 +170,12 @@ checks pass.
     - Start and stop the sidecar safely, bind only to loopback, work without a browser,
       and provide full and patch ZIP downloads.
     - Acceptance: a clean-machine installer test completes the full reference workflow.
-    - Status: PARTIAL. Installer `.cmd` built. Documents install exists. `prove_desktop_boot.py` against that `AppianSentinel.exe` returned health 200 on 7842 and UI bound on 8888 (`boot_exit=0`). Frozen sidecar pytest covers upload, package, download.
+    - Status: MET on the installed application. The standalone `.cmd` installs under Documents without Python or Node at runtime. The UI binds only to 127.0.0.1:8888 and the embedded sidecar binds only to 127.0.0.1:7842.
     - Two defects that only the installed GUI exposed, both now fixed and both invisible to the prior suite because every UI test mocked the sidecar and every API test was same-origin with no token:
         1. `/ws` accepted the token only as an `X-Sentinel-Token` header, which a browser cannot set on a handshake, so the app showed "Sidecar offline" permanently and reconnected every 2 seconds. The token now rides the `sentinel-token` subprotocol.
         2. The token middleware rejected the CORS preflight with 401 and no CORS headers, so every cross-origin REST call from the renderer on 8888 to the sidecar on 7842 died as "Failed to fetch" and the Object Explorer showed "Could not load objects". `OPTIONS` is now exempt; the real request is still gated.
     - `desktop/scripts/prove-renderer-auth.mjs` is the regression gate for both. It runs a real browser on a real separate origin against the frozen sidecar with a token set, and proves the tokened REST call and the tokened socket succeed while untokened and wrong-token attempts are refused.
-    - Status: MET on the installed application. `desktop/scripts/prove-installed-gui.mjs` drives the real installed `AppianSentinel.exe` through the entire reference workflow with no mock and no stub sidecar, and exited 0 on three consecutive runs in about two minutes each: the GUI reports the sidecar online, imports the 84.2 MB `Interactions Hub.zip`, shows 2,687 parsed objects in the Object Explorer, opens an object and renders its source, rebuilds the full ZIP, and downloads an 84.1 MB archive. The script then audits that archive and requires 2,871 entries with no internal `.history` state, which matches the source export file for file. A third defect surfaced here and is fixed: the rebuilt ZIP carried Sentinel's own `.history` snapshot store, which would have corrupted a real Appian import.
+    - `desktop/scripts/prove-installed-gui.mjs` drives the real installed `AppianSentinel.exe` through the entire reference workflow with no mock and no stub sidecar. The latest run exited 0: the GUI reported the sidecar online, imported the 84.2 MB `Interactions Hub.zip`, showed 2,687 parsed objects in the Object Explorer, opened an object and rendered its source, rebuilt the full ZIP, and downloaded an 84.1 MB archive. The script then audited that archive and required 2,871 entries with no internal `.history` state, which matches the source export file for file.
     - "Stop the sidecar safely" is now proven rather than assumed. `desktop/scripts/prove-job-object.mjs` starts an owner process that claims the Job Object and spawns a child that ignores `SIGTERM`, then kills the owner with `taskkill /F` and deliberately without `/T`, so nothing except the job can reap the child. It exits 0 only after observing the child die with its owner. The helper now reports whether assignment actually succeeded, so a nested parent job that blocks assignment exits 3 with a warning instead of passing silently; on this machine assignment succeeds and the guarantee holds.
     - Residual risk, stated plainly: this is a real install from the shipped `.cmd` on a machine that has previously built the project, not a freshly imaged Windows box. It proves the installed artifact, not the absence of every possible machine-level prerequisite.
 
@@ -186,9 +186,9 @@ round trips pass, and clean-machine installation passes. Live Appian deployment 
 execution are reported separately because an offline application cannot prove runtime
 behavior inside an Appian environment.
 
-Current standing against that gate: automated checks pass (217 passed, 2 skipped) and
+Current standing against that gate: automated checks pass (228 passed, 2 skipped) and
 package round trips pass, including the full 2,624-object rebuild. Rendered UI checks
-(R27, R28, R29) have a green 18-test run and a 40-item visual acceptance pass.
+(R27, R28, R29) have a green 27-test run and a 40-item visual acceptance pass.
 
 An independent audit of R1-R31 on 2026-09-19 found that several statuses above claimed
 more than their evidence proved. Those statuses have been corrected rather than the
@@ -199,24 +199,14 @@ the WebSocket token could not be sent by a browser, the CORS preflight was rejec
 the token middleware, and created record types and process models could not be parsed
 back by this project's own parser.
 
-Open gaps, in priority order:
+Open limitation:
 
-1. R10/R1 icon catalog is truncated (`is_complete is False`), so invented icons outside
-   the merged set are warnings rather than hard rejects. This one cannot be closed
-   honestly from here: the bundled 26.5 reference truncates the list, and the
-   authoritative `docs.appian.com` table is rendered client side, so it cannot be
-   scraped. Hard-rejecting against a knowingly partial list would fail valid Appian
-   icons, and inventing the missing names would break the same anti-invention rule this
-   project enforces on the model. Warning is the correct behavior until a complete list
-   can be obtained from an Appian instance.
-2. Verification depth is local by design. There is no CI workflow: this account has
+1. Verification depth is local by design. There is no CI workflow: this account has
    no Actions minutes, so a workflow that runs on every push costs without returning
    anything. A clean clone therefore verifies nothing automatically. The corpus,
    Playwright, PyInstaller, frozen-sidecar, desktop-boot, renderer-auth, Job Object,
    and installed-GUI gates are all run from this machine.
 
-R31, the gap that mattered most, is now closed against the installed application, and
-the Job Object, R20 tier, and R27 breadth gaps are closed with direct evidence. What
-is left is one ground-truth limitation and one deliberate cost decision, neither of
-which is unfinished implementation work. "Flawless" still overstates it: the icon
-catalog is provably partial, and the clean-machine claim is bounded as R31 describes.
+R10 and R31 are now closed with direct evidence. The remaining limitation is the
+deliberate local-only verification policy. "Flawless" still overstates the clean-machine
+claim because this machine has previously built the project, as R31 describes.
