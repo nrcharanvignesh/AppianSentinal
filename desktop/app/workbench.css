@@ -213,13 +213,30 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.designer-shell-body {
+  min-height: 0;
+  display: flex;
+}
+
+.designer-shell-body > .workbench-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Without this the inner grid sizes to content and overflows the row, which
+     floats the assistant pane over the bottom panel. */
+  min-height: 0;
+  height: 100%;
+}
+
 .workbench-main {
   min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-columns:
     var(--explorer-width, 250px)
     5px
-    minmax(320px, 1fr)
+    /* The navigation rail takes width from the same row, so the editor must
+       be allowed to shrink further than it needed to before. */
+    minmax(240px, 1fr)
     5px
     var(--assistant-width, 310px);
 }
@@ -439,6 +456,9 @@ button:disabled {
 .center-column {
   min-width: 0;
   min-height: 0;
+  /* Contents wider than the column must be clipped, not allowed to spill
+     under the neighbouring resize handle where they cannot be clicked. */
+  overflow: hidden;
   display: grid;
   grid-template-rows: minmax(180px, 1fr) 5px var(--results-height, 174px);
 }
@@ -1268,6 +1288,12 @@ kbd {
 
 .bottom-panel {
   min-height: 0;
+  /* The tab strip and result rows are wider than a narrow editor column, so
+     without this the panel grows past its column and covers the assistant. */
+  min-width: 0;
+  /* auto, not hidden: the panel must stay reachable by scrolling when the
+     editor column is narrow, rather than silently clipping its contents. */
+  overflow: auto;
   border-top: 1px solid var(--border-ui);
   background: var(--surface);
 }

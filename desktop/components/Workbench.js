@@ -6,10 +6,12 @@ import { buildNavigation } from '../lib/sail-symbols';
 import AssistantPanel from './AssistantPanel';
 import BottomPanel from './BottomPanel';
 import EditorWorkspace from './EditorWorkspace';
+import NavigationPane from './NavigationPane';
 import ObjectExplorer from './ObjectExplorer';
 import TopAppBar from './TopAppBar';
 
 const TESTABLE_TYPES = new Set(['interface', 'expression_rule']);
+const AVAILABLE_DESIGNER_VIEWS = ['build'];
 const EMPTY_SETTINGS = {
   base_url: '', api_key: '', protocol: 'auto', primary_model: '', fast_model: '',
   ado_org: '', ado_project: '', ado_pat: '',
@@ -401,6 +403,15 @@ export default function Workbench() {
         status={status.status}
         onUpload={upload}
       />
+      <div className="designer-shell-body">
+        {/* Appian's application navigation. Only Build is enabled: the other
+            views have no implementation here, so they are shown disabled with
+            a reason rather than hidden or faked. */}
+        <NavigationPane
+          active="build"
+          available={AVAILABLE_DESIGNER_VIEWS}
+          onNavigate={() => {}}
+        />
       <div
         className="workbench-main"
         style={{
@@ -496,6 +507,7 @@ export default function Workbench() {
           onTestSettings={testSettings}
           onListModels={api.listModels}
         />
+      </div>
       </div>
       <footer className="statusbar">
         <span>Appian {codebase?.appian_version || '--'}</span>

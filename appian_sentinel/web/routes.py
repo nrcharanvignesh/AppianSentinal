@@ -515,6 +515,70 @@ async def get_object_diagnostics(request: Request, uuid: str) -> JSONResponse:
     })
 
 
+class AdHocTestBody(BaseModel):
+    """Values the operator entered for an ad hoc run."""
+
+    inputs: dict[str, str] = Field(default_factory=dict)
+
+
+@router.post("/objects/{uuid}/tests/run-static")
+async def run_object_static_test(
+    request: Request,
+    uuid: str,
+    body: AdHocTestBody,
+) -> JSONResponse:
+    """Analyse a definition against the operator's supplied rule inputs.
+
+    This is not an Appian evaluation and must never be presented as one:
+    there is no Appian engine here, so no output value can be produced. What
+    it does is treat the supplied input names as declared, which catches the
+    most common ad hoc mistake of referencing an input that does not exist.
+    The response says so explicitly so the UI cannot imply more.
+    """
+    session = _get_session(request)
+    state: AgentState = session["state"]
+    obj, _, _ = _session_object(state, uuid)
+    definition = obj.get("definition")
+    if not isinstance(definition, str) or not definition:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "object_has_no_sail_definition"},
+        )
+    codebase = state.codebase_map or {}
+    declared = {
+        item["name"]
+        for item in obj.get("rule_inputs", [])
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    declared.update(body.inputs)
+    analysis = analyze_sail(
+        definition,
+        target_version=codebase.get("appian_version") or None,
+        known_uuids=set(codebase.get("objects", {})),
+        declared_inputs=sorted(declared),
+    )
+    return JSONResponse({
+        "kind": "static_analysis",
+        "evaluated": False,
+        "note": (
+            "Static analysis only. Appian Sentinel has no Appian engine, so "
+            "the rule was not evaluated and no output value was produced."
+        ),
+        "is_valid": analysis.is_valid,
+        "inputs": body.inputs,
+        "diagnostics": [
+            {
+                "code": item.code,
+                "message": item.message,
+                "severity": item.severity.value,
+                "line": item.line,
+                "column": item.column,
+            }
+            for item in analysis.diagnostics
+        ],
+    })
+
+
 @router.get("/objects/{uuid}/tests")
 async def get_object_tests(request: Request, uuid: str) -> JSONResponse:
     """Extract embedded test cases from the source XML."""

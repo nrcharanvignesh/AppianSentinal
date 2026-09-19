@@ -77,6 +77,10 @@ export const api = {
   objectTests: (uuid) => request(
     `/api/objects/${encodeURIComponent(uuid)}/tests?session_id=${SESSION_ID}`,
   ),
+  runObjectStaticTest: (uuid, inputs) => request(
+    `/api/objects/${encodeURIComponent(uuid)}/tests/run-static?session_id=${SESSION_ID}`,
+    json({ inputs }),
+  ),
   status: () => request(`/api/status?session_id=${SESSION_ID}`),
   tests: () => request(`/api/test-results?session_id=${SESSION_ID}`),
   changes: () => request(`/api/diff?session_id=${SESSION_ID}`),

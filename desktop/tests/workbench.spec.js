@@ -428,7 +428,7 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     // Settings is the exception: testing and saving the connection are the
     // recovery path, so gating them on being online would trap the operator.
     await page.getByRole('tab', { name: 'Settings' }).click();
-    await expect(page.getByRole('button', { name: 'Test' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Test', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });
@@ -513,7 +513,9 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
   test('bulk tests require preview before confirmed apply', async ({ page }) => {
     const calls = await openWorkbench(page, true);
     await page.getByRole('tab', { name: 'Tests' }).click();
-    await page.getByLabel('APP_Test').check();
+    // Scoped to the bulk picker: the Build grid also has a row checkbox for
+    // this object, so an unscoped label match is ambiguous.
+    await page.locator('.bulk-picker').getByLabel('APP_Test').check();
 
     const previewButton = page.getByRole('button', { name: 'Preview selected' });
     const applyButton = page.getByRole('button', { name: 'Confirm apply' });
@@ -656,7 +658,9 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await page.getByRole('tab', { name: 'Settings' }).click();
     await expect(page.getByLabel('Primary model')).toHaveRole('combobox');
-    await page.getByRole('button', { name: 'Test' }).click();
+    // exact: the Build grid renders object names as buttons, and APP_Test
+    // would otherwise match this substring.
+    await page.getByRole('button', { name: 'Test', exact: true }).click();
 
     // The old client dropped the body and rendered "502 Bad Gateway".
     await expect(page.getByText('route not found')).toBeVisible();
