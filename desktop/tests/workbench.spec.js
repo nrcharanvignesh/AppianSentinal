@@ -179,6 +179,45 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   });
 
+  test('all primary work areas resize and persist', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+    const explorer = page.getByRole('separator', { name: 'Resize object explorer' });
+    const assistant = page.getByRole('separator', { name: 'Resize assistant' });
+    const results = page.getByRole('separator', { name: 'Resize results panel' });
+
+    const explorerBefore = Number(await explorer.getAttribute('aria-valuenow'));
+    const explorerBox = await explorer.boundingBox();
+    await page.mouse.move(explorerBox.x + 2, explorerBox.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(explorerBox.x + 42, explorerBox.y + 40, { steps: 4 });
+    await page.mouse.up();
+    await expect(explorer).toHaveAttribute('aria-valuenow', String(explorerBefore + 40));
+
+    const assistantBefore = Number(await assistant.getAttribute('aria-valuenow'));
+    await assistant.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(assistant).toHaveAttribute('aria-valuenow', String(assistantBefore + 16));
+
+    const resultsBefore = Number(await results.getAttribute('aria-valuenow'));
+    await results.focus();
+    await page.keyboard.press('ArrowUp');
+    await expect(results).toHaveAttribute('aria-valuenow', String(resultsBefore + 16));
+
+    const saved = {
+      explorer: await explorer.getAttribute('aria-valuenow'),
+      assistant: await assistant.getAttribute('aria-valuenow'),
+      results: await results.getAttribute('aria-valuenow'),
+    };
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('separator', { name: 'Resize object explorer' }))
+      .toHaveAttribute('aria-valuenow', saved.explorer);
+    await expect(page.getByRole('separator', { name: 'Resize assistant' }))
+      .toHaveAttribute('aria-valuenow', saved.assistant);
+    await expect(page.getByRole('separator', { name: 'Resize results panel' }))
+      .toHaveAttribute('aria-valuenow', saved.results);
+  });
+
   test('object explorer region exists and shows empty state', async ({ page }) => {
     await openWorkbench(page);
     const explorer = page.getByRole('complementary', { name: 'Object explorer' });
@@ -358,6 +397,9 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await expect(page.getByRole('button', { name: 'Preview selected' })).toBeDisabled();
     await page.getByRole('tab', { name: 'History' }).click();
     await expect(page.getByText('History disabled: load an export first.')).toBeVisible();
+    await page.getByRole('tab', { name: 'Settings' }).click();
+    await expect(page.getByRole('button', { name: 'Test' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
   });
 });
 

@@ -14,6 +14,63 @@ const EMPTY_SETTINGS = {
   base_url: '', api_key: '', protocol: 'auto', primary_model: '', fast_model: '',
   ado_org: '', ado_project: '', ado_pat: '',
 };
+const PANEL_STORAGE_KEY = 'appian-sentinel-panel-sizes';
+const PANEL_DEFAULTS = { explorer: 250, assistant: 310, results: 174 };
+const PANEL_LIMITS = {
+  explorer: [180, 420],
+  assistant: [220, 480],
+  results: [110, 360],
+};
+
+function clampPanel(name, value) {
+  const [minimum, maximum] = PANEL_LIMITS[name];
+  return Math.max(minimum, Math.min(maximum, Math.round(value)));
+}
+
+function ResizeHandle({ orientation, label, value, minimum, maximum, onDelta }) {
+  function startResize(event) {
+    const axis = orientation === 'vertical' ? 'clientX' : 'clientY';
+    let previous = event[axis];
+    const move = (moveEvent) => {
+      const current = moveEvent[axis];
+      onDelta(current - previous);
+      previous = current;
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      document.body.classList.remove('is-resizing');
+    };
+    document.body.classList.add('is-resizing');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+    event.preventDefault();
+  }
+
+  function resizeWithKeyboard(event) {
+    const changes = orientation === 'vertical'
+      ? { ArrowLeft: -16, ArrowRight: 16 }
+      : { ArrowUp: -16, ArrowDown: 16 };
+    if (!(event.key in changes)) return;
+    event.preventDefault();
+    onDelta(changes[event.key]);
+  }
+
+  return (
+    <div
+      className={`resize-handle is-${orientation}`}
+      role="separator"
+      aria-label={label}
+      aria-orientation={orientation}
+      aria-valuemin={minimum}
+      aria-valuemax={maximum}
+      aria-valuenow={value}
+      tabIndex={0}
+      onPointerDown={startResize}
+      onKeyDown={resizeWithKeyboard}
+    />
+  );
+}
 
 function percentOf(current, total) {
   if (!total) return 0;
@@ -39,8 +96,48 @@ export default function Workbench() {
   const [progress, setProgress] = useState(null);
   const [settings, setSettings] = useState(EMPTY_SETTINGS);
   const [settingsState, setSettingsState] = useState('');
+  const [panelSizes, setPanelSizes] = useState(PANEL_DEFAULTS);
+  const [panelSizesLoaded, setPanelSizesLoaded] = useState(false);
   const socketRef = useRef(null);
   const progressTimerRef = useRef(0);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(PANEL_STORAGE_KEY) || '{}');
+      setPanelSizes({
+        explorer: clampPanel('explorer', saved.explorer ?? PANEL_DEFAULTS.explorer),
+        assistant: clampPanel('assistant', saved.assistant ?? PANEL_DEFAULTS.assistant),
+        results: clampPanel('results', saved.results ?? PANEL_DEFAULTS.results),
+      });
+    } catch {
+      setPanelSizes(PANEL_DEFAULTS);
+    }
+    setPanelSizesLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (panelSizesLoaded) {
+      window.localStorage.setItem(PANEL_STORAGE_KEY, JSON.stringify(panelSizes));
+    }
+  }, [panelSizes, panelSizesLoaded]);
+
+  const resizePanel = useCallback((name, delta) => {
+    setPanelSizes((current) => {
+      const [minimum, configuredMaximum] = PANEL_LIMITS[name];
+      let maximum = configuredMaximum;
+      if (name === 'explorer') {
+        maximum = Math.min(maximum, window.innerWidth - current.assistant - 328);
+      } else if (name === 'assistant') {
+        maximum = Math.min(maximum, window.innerWidth - current.explorer - 328);
+      } else {
+        maximum = Math.min(maximum, window.innerHeight - 256);
+      }
+      return {
+        ...current,
+        [name]: Math.max(minimum, Math.min(Math.max(minimum, maximum), current[name] + delta)),
+      };
+    });
+  }, []);
 
   const loadCodebase = useCallback(async () => {
     setCodebaseState({ loading: true, error: '' });
@@ -304,7 +401,13 @@ export default function Workbench() {
         status={status.status}
         onUpload={upload}
       />
-      <div className="workbench-main">
+      <div
+        className="workbench-main"
+        style={{
+          '--explorer-width': `${panelSizes.explorer}px`,
+          '--assistant-width': `${panelSizes.assistant}px`,
+        }}
+      >
         <ObjectExplorer
           codebase={codebase}
           loading={codebaseState.loading}
@@ -312,7 +415,18 @@ export default function Workbench() {
           selectedId={activeId}
           onSelect={openObject}
         />
-        <div className="center-column">
+        <ResizeHandle
+          orientation="vertical"
+          label="Resize object explorer"
+          value={panelSizes.explorer}
+          minimum={PANEL_LIMITS.explorer[0]}
+          maximum={PANEL_LIMITS.explorer[1]}
+          onDelta={(delta) => resizePanel('explorer', delta)}
+        />
+        <div
+          className="center-column"
+          style={{ '--results-height': `${panelSizes.results}px` }}
+        >
           <EditorWorkspace
             tabs={tabs}
             activeId={activeId}
@@ -328,6 +442,14 @@ export default function Workbench() {
             onClose={closeTab}
             onSave={saveObject}
             onOpenObject={openObject}
+          />
+          <ResizeHandle
+            orientation="horizontal"
+            label="Resize results panel"
+            value={panelSizes.results}
+            minimum={PANEL_LIMITS.results[0]}
+            maximum={PANEL_LIMITS.results[1]}
+            onDelta={(delta) => resizePanel('results', -delta)}
           />
           <BottomPanel
             diagnostics={diagnostics}
@@ -351,6 +473,14 @@ export default function Workbench() {
             onOpenObject={openObject}
           />
         </div>
+        <ResizeHandle
+          orientation="vertical"
+          label="Resize assistant"
+          value={panelSizes.assistant}
+          minimum={PANEL_LIMITS.assistant[0]}
+          maximum={PANEL_LIMITS.assistant[1]}
+          onDelta={(delta) => resizePanel('assistant', -delta)}
+        />
         <AssistantPanel
           messages={messages}
           currentStep={status.current_step || 0}

@@ -149,8 +149,24 @@ export default function AssistantPanel({
           <label>ADO project<input value={form.ado_project || ''} onChange={setField('ado_project')} /></label>
           <label>ADO PAT<input type="password" value={form.ado_pat || ''} onChange={setField('ado_pat')} /></label>
           <div className="form-actions">
-            <button type="button" className="secondary-button" onClick={() => onTestSettings(form)}>Test</button>
-            <button type="button" className="primary-button" onClick={() => onSaveSettings(form)}>Save</button>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!connected}
+              title={connected ? 'Test provider settings' : 'Sidecar connection required'}
+              onClick={() => onTestSettings(form)}
+            >
+              Test
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              disabled={!connected}
+              title={connected ? 'Save provider settings' : 'Sidecar connection required'}
+              onClick={() => onSaveSettings(form)}
+            >
+              Save
+            </button>
           </div>
           {settingsState && <p className="form-state" aria-live="polite">{settingsState}</p>}
         </div>

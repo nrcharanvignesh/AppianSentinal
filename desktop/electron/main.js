@@ -18,6 +18,7 @@ const UI_PORT = Number(process.env.SENTINEL_UI_PORT || 8888);
 const HEALTH_TIMEOUT_MS = 120000;
 const POLL_MS = 250;
 const SPLASH_TIMEOUT_MS = 60000;
+const MAX_AGENT_RESTARTS = 5;
 const IS_DEV = process.env.SENTINEL_DEV === '1' || !app.isPackaged;
 const DESKTOP_ROOT = path.join(__dirname, '..');
 const REPO_ROOT = path.join(DESKTOP_ROOT, '..');
@@ -32,6 +33,8 @@ let splashTimer = null;
 let agentProc = null;
 let uiProc = null;
 let shuttingDown = false;
+let agentRestartAttempts = 0;
+let agentRestartTimer = null;
 
 function configureRuntimePaths() {
   const paths = resolveWorkspacePaths();
@@ -280,6 +283,33 @@ function pipeChild(child, label) {
   child.stderr?.on('data', (chunk) => process.stderr.write(`[${label}] ${chunk}`));
 }
 
+function scheduleAgentRestart(code, signal) {
+  if (shuttingDown || agentRestartTimer) return;
+  if (agentRestartAttempts >= MAX_AGENT_RESTARTS) {
+    log('ERROR', `Agent stopped after ${MAX_AGENT_RESTARTS} restart attempts.`);
+    return;
+  }
+  const delayMs = Math.min(1000 * (2 ** agentRestartAttempts), 10000);
+  agentRestartAttempts += 1;
+  log(
+    'WARN',
+    `Agent exited unexpectedly (code ${code ?? 'none'}, signal ${signal ?? 'none'}); ` +
+      `restart ${agentRestartAttempts}/${MAX_AGENT_RESTARTS} in ${delayMs}ms.`
+  );
+  agentRestartTimer = setTimeout(async () => {
+    agentRestartTimer = null;
+    try {
+      await startAgent();
+      agentRestartAttempts = 0;
+      log('INFO', 'Agent restart completed.');
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      log('WARN', `Agent restart failed: ${detail}`);
+      scheduleAgentRestart(null, null);
+    }
+  }, delayMs);
+}
+
 async function startUiServer() {
   if (IS_DEV) {
     const url = process.env.NEXT_DEV_SERVER_URL || `http://127.0.0.1:${UI_PORT}`;
@@ -358,15 +388,18 @@ async function startAgent() {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   agentProc = child;
+  let ready = false;
   pipeChild(child, 'agent');
-  child.once('exit', () => {
+  child.once('exit', (code, signal) => {
     if (agentProc === child) agentProc = null;
+    if (ready) scheduleAgentRestart(code, signal);
   });
   await Promise.race([
     waitForHealth(OWNERSHIP_ID),
     rejectOnSpawnError(child, 'agent'),
     rejectOnEarlyExit(child, 'agent'),
   ]);
+  ready = true;
 }
 
 function closeSplash() {
@@ -462,6 +495,8 @@ function killChildTree(child) {
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  if (agentRestartTimer) clearTimeout(agentRestartTimer);
+  agentRestartTimer = null;
   closeSplash();
   const agent = agentProc;
   const ui = uiProc;

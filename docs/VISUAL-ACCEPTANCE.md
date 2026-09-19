@@ -53,7 +53,7 @@ Graded evidence:
 
 - [x] C1 PASS - Import and Save use a primary treatment; Copy source and secondary operations use a lower-emphasis treatment.
 - [x] C2 PASS - Disabled Save and Send controls are visibly muted and are asserted disabled by Playwright where their prerequisites are absent.
-- [x] C3 PASS - Search, text areas, tabs, tree rows, and buttons have visible boundaries or interaction affordances appropriate to their role.
+- [x] C3 PASS - Search, text areas, tabs, tree rows, buttons, and the three keyboard-accessible resize separators have visible interaction affordances appropriate to their role.
 - [x] C4 PASS - Diagnostic severity is not encoded by color alone: the Problems row includes `ERROR`, a code, a message, and a line number.
 
 ### Color - 4 of 4

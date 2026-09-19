@@ -158,7 +158,7 @@ checks pass.
     - Use Appian-style information hierarchy, navigation, density, controls, color,
       typography, focus behavior, loading, empty, and error states.
     - Acceptance: rendered desktop views pass the visual acceptance checklist.
-    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. MUI dark mode is the default, light mode persists across reloads, and both use the supplied product icon. `npx playwright test` passed 17 tests, including both rendered themes, visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
+    - Status: MET. `docs/VISUAL-ACCEPTANCE.md` grades 40 binary items across information hierarchy, navigation, density, controls, color, typography, focus behavior, loading, empty, and error states. MUI dark mode is the default, light mode persists across reloads, and both use the supplied product icon. Explorer, assistant, and results regions resize by pointer or keyboard and persist their dimensions. `npx playwright test` passed 18 tests, including both rendered themes, visible 2-pixel focus outlines, primary-action tab order, intended state copy, no console errors, no horizontal overflow, and ASCII-only text.
 
 30. Show progress for upload, parsing, AI calls, all workflow steps, test runs,
     packaging, and downloads.
@@ -181,7 +181,7 @@ behavior inside an Appian environment.
 
 Current standing against that gate: automated checks pass and package round trips pass,
 including the full 2,624-object rebuild. Rendered UI checks (R27, R28, R29) now have a
-green 17-test run and a 40-item visual acceptance pass. One condition remains unmet:
+green 18-test run and a 40-item visual acceptance pass. One condition remains unmet:
 clean-machine installation (R31) has a hash-verified artifact
 but no install on a machine without the development toolchain, so the full reference
 workflow has never been driven through the installed application. Until that clears,
