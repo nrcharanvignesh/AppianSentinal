@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializeAsAny
 
 from appian_sentinel.models.appian_objects import AppianObject, ObjectType
 
@@ -69,8 +69,14 @@ class CodebaseMap(BaseModel):
     plugins: list[PluginInfo] = Field(default_factory=list)
 
     # --- Objects (keyed by UUID) --------------------------------------------
-    objects: dict[str, AppianObject] = Field(default_factory=dict)
-    uuid_collisions: dict[str, list[AppianObject]] = Field(default_factory=dict)
+    # SerializeAsAny is load-bearing: Pydantic v2 serialises by the declared
+    # type, so without it every subclass field (an expression rule's
+    # definition, an interface's definition, a constant's value) is silently
+    # dropped and the API hands the UI an object with no source at all.
+    objects: dict[str, SerializeAsAny[AppianObject]] = Field(default_factory=dict)
+    uuid_collisions: dict[str, list[SerializeAsAny[AppianObject]]] = Field(
+        default_factory=dict,
+    )
 
     # --- Lookup indices ------------------------------------------------------
     uuid_to_name: dict[str, str] = Field(default_factory=dict)
