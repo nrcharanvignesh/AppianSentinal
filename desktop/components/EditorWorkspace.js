@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { decorateTokens, positionToOffset, referenceAt } from '../lib/sail-highlight';
 import { extractSymbols } from '../lib/sail-symbols';
+import { api } from '../lib/api';
+import AdHocTestPanel from './AdHocTestPanel';
 import BuildGrid from './BuildGrid';
 
 const SOURCE_FIELDS = ['definition', 'expression', 'value'];
@@ -228,6 +230,7 @@ export default function EditorWorkspace({
             <div className="segmented" role="tablist" aria-label="Object view">
               <button type="button" role="tab" aria-selected={view === 'source'} onClick={() => setView('source')}>Source</button>
               <button type="button" role="tab" aria-selected={view === 'metadata'} onClick={() => setView('metadata')}>Metadata</button>
+              <button type="button" role="tab" aria-selected={view === 'test'} onClick={() => setView('test')}>Ad Hoc Test</button>
             </div>
             <div className="editor-actions">
               <span className="object-type">{object?.object_type?.replaceAll('_', ' ') || 'object'}</span>
@@ -290,6 +293,12 @@ export default function EditorWorkspace({
             )}
             {!loading && !error && object && view === 'metadata' && (
               <pre className="metadata-view">{JSON.stringify(object, null, 2)}</pre>
+            )}
+            {!loading && !error && object && view === 'test' && (
+              <AdHocTestPanel
+                ruleInputs={object.rule_inputs || []}
+                onRunTest={(inputs) => api.runObjectStaticTest(activeId, inputs)}
+              />
             )}
           </div>
           {(saveState || !codebaseLoaded) && (

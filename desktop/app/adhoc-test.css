@@ -1,0 +1,251 @@
+.adhoc-harness {
+  height: 100vh;
+  overflow: auto;
+  padding: 24px;
+  color: var(--text-ui);
+  background: var(--canvas);
+}
+
+.adhoc-harness-toolbar {
+  max-width: 980px;
+  margin: 0 auto 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.adhoc-harness-toolbar button,
+.adhoc-output-modes button {
+  border: 1px solid var(--border-ui);
+  color: var(--text-ui);
+  background: var(--surface);
+}
+
+.adhoc-panel {
+  max-width: 980px;
+  margin: 0 auto;
+  border: 1px solid var(--border-ui);
+  color: var(--text-ui);
+  background: var(--surface);
+  font-family: var(--font-ui);
+}
+
+.adhoc-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-ui);
+}
+
+.adhoc-header h1,
+.adhoc-section h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.adhoc-header h1 {
+  font-size: 20px;
+}
+
+.adhoc-header p {
+  max-width: 620px;
+  margin: 6px 0 0;
+  color: var(--text-muted-ui);
+  line-height: 1.5;
+}
+
+.adhoc-run {
+  min-width: 112px;
+  min-height: 36px;
+  border: 1px solid var(--appian-blue);
+  color: #ffffff;
+  background: var(--appian-blue);
+  font-weight: 700;
+}
+
+.adhoc-run:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.adhoc-section {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border-ui);
+}
+
+.adhoc-section:last-child {
+  border-bottom: 0;
+}
+
+.adhoc-section h2 {
+  font-size: 15px;
+}
+
+.adhoc-input-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.adhoc-input {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border-ui);
+  background: var(--surface-muted);
+}
+
+.adhoc-input legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.adhoc-input legend small {
+  margin-left: 8px;
+  color: var(--text-muted-ui);
+  font-weight: 400;
+}
+
+.adhoc-mode {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 10px;
+}
+
+.adhoc-mode label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.adhoc-value {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted-ui);
+  font-size: 12px;
+}
+
+.adhoc-value textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-ui);
+  padding: 8px 10px;
+  color: var(--text-ui);
+  background: var(--surface);
+  font-family: var(--font-code);
+  line-height: 1.45;
+}
+
+.adhoc-empty {
+  margin: 12px 0 0;
+  color: var(--text-muted-ui);
+}
+
+.adhoc-variables {
+  margin: 12px 0 0;
+}
+
+.adhoc-variables div {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.4fr) 1fr;
+  border-top: 1px solid var(--border-ui);
+  padding: 8px 0;
+}
+
+.adhoc-variables dt {
+  font-family: var(--font-code);
+}
+
+.adhoc-variables dd {
+  margin: 0;
+  color: var(--text-muted-ui);
+}
+
+.adhoc-output-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.adhoc-output-modes {
+  display: flex;
+}
+
+.adhoc-output-modes button,
+.adhoc-harness-toolbar button {
+  min-height: 32px;
+  padding: 5px 10px;
+}
+
+.adhoc-output-modes button + button {
+  border-left: 0;
+}
+
+.adhoc-output-modes button[aria-selected="true"] {
+  color: var(--appian-blue-dark);
+  background: var(--appian-blue-soft);
+  box-shadow: inset 0 -2px var(--appian-blue);
+}
+
+.adhoc-run-status {
+  margin-top: 14px;
+  border-left: 3px solid var(--border-strong);
+  padding: 8px 10px;
+  color: var(--text-muted-ui);
+  background: var(--surface-muted);
+}
+
+.adhoc-output {
+  max-height: 280px;
+  overflow: auto;
+  margin: 12px 0 0;
+  border: 1px solid var(--border-ui);
+  padding: 12px;
+  color: var(--text-ui);
+  background: var(--surface-muted);
+  font-family: var(--font-code);
+  white-space: pre-wrap;
+}
+
+.adhoc-saved ul {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adhoc-saved li {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid var(--border-ui);
+  padding: 10px 0;
+}
+
+.adhoc-saved strong {
+  color: var(--text-muted-ui);
+  text-align: right;
+}
+
+@media (max-width: 680px) {
+  .adhoc-harness {
+    padding: 0;
+  }
+
+  .adhoc-header,
+  .adhoc-output-heading,
+  .adhoc-saved li {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .adhoc-output-modes {
+    width: 100%;
+  }
+
+  .adhoc-output-modes button {
+    flex: 1;
+  }
+}
