@@ -8,6 +8,7 @@ from lxml import etree
 
 from appian_sentinel.generator import xml_writer
 from appian_sentinel.generator.object_writer import ObjectWriteError, write_object
+from appian_sentinel.parser.codebase_map import build_codebase_map
 
 UUID = "_a-11111111-1111-8000-1111-111111111111_100001"
 VERSION_UUID = "_a-22222222-2222-8000-2222-222222222222_100002"
@@ -207,6 +208,59 @@ def test_record_type_modify_preserves_unrelated_nodes(tmp_path: Path) -> None:
     assert _canonical(
         after.xpath("//*[local-name()='recordRelationshipCfg']")[0]
     ) == before_relationship
+
+
+@pytest.mark.parametrize(
+    ("obj_type", "directory", "uuid", "name", "extra"),
+    [
+        (
+            "record_type",
+            "recordType",
+            "33333333-3333-4333-8333-333333333333",
+            "APP_Created_Record",
+            {
+                "fields": [{"name": "status", "type": "Text"}],
+                "dataSource": {"tableName": "app_created"},
+            },
+        ),
+        (
+            "process_model",
+            "processModel",
+            "44444444-4444-4444-8444-444444444444",
+            "APP_Created_Process",
+            {"processVariables": [{"name": "requestId", "type": "Text"}]},
+        ),
+    ],
+)
+def test_created_record_and_process_objects_parse_back(
+    tmp_path: Path,
+    obj_type: str,
+    directory: str,
+    uuid: str,
+    name: str,
+    extra: dict[str, object],
+) -> None:
+    """Create on the record and process tiers must survive a real re-parse."""
+    result = write_object(
+        tmp_path,
+        {
+            "type": obj_type,
+            "name": name,
+            "uuid": uuid,
+            "versionUuid": VERSION_UUID,
+            "action": "create",
+            **extra,
+        },
+    )
+
+    assert result == tmp_path / directory / f"{uuid}.xml"
+    assert result.is_file()
+
+    codebase = build_codebase_map(tmp_path)
+    parsed = codebase.get_object(uuid)
+    assert parsed is not None, f"created {obj_type} did not parse back"
+    assert parsed.name == name
+    assert parsed.file_path == f"{directory}/{uuid}.xml"
 
 
 def test_process_model_modify_preserves_unrelated_nodes(tmp_path: Path) -> None:

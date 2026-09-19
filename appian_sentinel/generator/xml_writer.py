@@ -188,9 +188,11 @@ def write_record_type_xml(obj_data: dict[str, Any], output_path: Path) -> None:
     root = etree.Element("recordTypeHaul", nsmap=NSMAP)
     _se(root, "versionUuid", obj_data.get("versionUuid", ""))
 
+    # Real exports carry identity as attributes on <recordType>, and
+    # parse_record_type_xml reads them there, not as child elements.
     rt = _se(root, "recordType")
-    _se(rt, "name", obj_data["name"])
-    _se(rt, "uuid", obj_data["uuid"])
+    rt.set(f"{{{APPIAN_NS}}}uuid", obj_data["uuid"])
+    rt.set("name", obj_data["name"])
     if obj_data.get("description"):
         _se(rt, "description", obj_data["description"])
     if obj_data.get("parentUuid"):
@@ -245,14 +247,23 @@ def write_process_model_xml(obj_data: dict[str, Any], output_path: Path) -> None
 
     root = etree.Element("processModelHaul", nsmap=NSMAP)
     _se(root, "versionUuid", obj_data.get("versionUuid", ""))
+    if obj_data.get("folderUuid"):
+        _se(root, "folderUuid", obj_data["folderUuid"])
 
-    pm = _se(root, "processModel")
-    _se(pm, "name", obj_data["name"])
-    _se(pm, "uuid", obj_data["uuid"])
+    # Real exports nest the model under <process_model_port><pm>, and the name
+    # is a locale string-map. parse_process_model_xml requires both.
+    pm = _se(_se(root, "process_model_port"), "pm")
+    meta = _se(pm, "meta")
+    _se(meta, "uuid", obj_data["uuid"])
+    pair = _se(_se(_se(meta, "name"), "string-map"), "pair")
+    locale = _se(pair, "locale")
+    locale.set("country", "US")
+    locale.set("lang", "en")
+    _se(pair, "value", obj_data["name"])
     if obj_data.get("description"):
-        _se(pm, "description", obj_data["description"])
+        _se(meta, "description", obj_data["description"])
     if obj_data.get("parentUuid"):
-        _se(pm, "parentUuid", obj_data["parentUuid"])
+        _se(meta, "parentUuid", obj_data["parentUuid"])
 
     # Process variables
     for pv in obj_data.get("processVariables", []):

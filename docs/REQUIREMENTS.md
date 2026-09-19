@@ -29,7 +29,7 @@ checks pass.
 5. Establish repository and verification foundations.
     - Add a safe Git baseline, automated tests, fixtures, linting, and build checks.
     - Acceptance: clean checkout can run all checks with documented commands.
-    - Status: MET. Root `README.md` documents commands that exited 0 here; `.github/workflows/ci.yml` runs install, ruff, and pytest. The earlier `pip install -e .` break is fixed: `build-backend` is now `setuptools.build_meta` with package discovery scoped to `appian_sentinel*`, and `python -m pip install -e . --no-deps --dry-run` exits 0 ("Would install appian-sentinel-0.1.0"). Residual: corpus gates still skip without `./appian_export/`.
+    - Status: MET. Root `README.md` documents commands that exited 0 here; `.github/workflows/ci.yml` runs install, ruff, and pytest. The earlier `pip install -e .` break is fixed: `build-backend` is now `setuptools.build_meta` with package discovery scoped to `appian_sentinel*`, and `python -m pip install -e . --no-deps --dry-run` exits 0 ("Would install appian-sentinel-0.1.0"). Doc drift found and fixed here: `README.md` still described the editable install as broken and quoted a stale 172-test count. Residual: corpus gates skip without `./appian_export/`, and CI does not run the Playwright, PyInstaller, frozen-sidecar, or desktop-boot gates.
 
 ## Wave 1: Appian code intelligence
 
@@ -62,7 +62,7 @@ checks pass.
 11. Read and write all required Appian object tiers.
     - Support content objects, record types, process models, and their metadata.
     - Acceptance: object-level round trips preserve untouched XML and payloads.
-    - Status: MET. `tests/test_object_writer_roundtrip.py` content, record_type, and process_model preserve-unrelated-nodes cases passed in `python -m pytest -q`.
+    - Status: MET. `tests/test_object_writer_roundtrip.py` covers modify on all three tiers with preserve-unrelated-nodes assertions, and create on all three tiers. Defect found and fixed here: an audit showed create was only ever tested on the content tier, and adding create round trips proved the writer emitted record types and process models that the project's own parser could not read back. The writer put `uuid` and `name` in child elements while real exports and `parse_record_type_xml` use attributes, and it omitted the `process_model_port/pm/meta` wrapper and locale string-map name that `parse_process_model_xml` requires. Both create paths now emit the real export shape and are proven by writing, re-running `build_codebase_map`, and resolving the object by UUID, name, and file path.
 
 12. Rebuild the full Appian ZIP in the original archive structure.
     - Acceptance: unzip, analyze, rebuild, and re-analyze produce equivalent inventory.
@@ -107,7 +107,7 @@ checks pass.
 20. Create and modify required Appian objects across all three tiers.
     - Use existing object identities and real data-model context; never invent UUIDs.
     - Acceptance: generated changes pass validation and object round-trip tests.
-    - Status: MET. `tests/test_generated_object_validation.py` passed in `python -m pytest -q` (create + SAIL validate + codebase resolve; invalid SAIL rejected before write).
+    - Status: PARTIAL. `tests/test_generated_object_validation.py` passed (create + SAIL validate + codebase resolve; invalid SAIL rejected before write), but an audit of the evidence shows the generation path is proven on the content tier only: generated interface create, fix-loop interface create, and MCP `generate_sail` on an interface. Record-type and process-model writes are proven at the writer layer (R11), not through the orchestrator or MCP generation path. NOT YET MET: generated record-type and process-model create/modify driven end to end through the agent or MCP with validation and round trip.
 
 21. Generate comprehensive functional, negative, edge, regression, performance, and
     accessibility test cases mapped to every acceptance criterion.
@@ -146,7 +146,7 @@ checks pass.
 27. Provide object browsing for interfaces, constants, rules, record types, process
     models, and every other parsed type.
     - Acceptance: users can open objects from the type tree and inspect metadata and source.
-    - Status: MET. `npx playwright test` -> 17 passed, and the rendered workbench screenshot shows the typed Object Explorer tree, name/UUID search, and an opened object with Source and Metadata tabs. Caveat: the rendered runs use the deterministic sidecar fixture, so tree behaviour at 2,624-object scale is inferred from the parser tests rather than observed.
+    - Status: PARTIAL. `npx playwright test` -> 18 passed, and the rendered workbench screenshot shows the typed Object Explorer tree, name/UUID search, and an opened object with Source and Metadata tabs. The rendered fixture contains expression rules only, so "every other parsed type" in the explorer is proven at the parser layer rather than observed in the UI, and tree behaviour at 2,624-object scale is likewise inferred.
 
 28. Provide a proper Appian-focused IDE.
     - Include object explorer, tabs, read/edit source, SAIL highlighting, diagnostics,
@@ -184,10 +184,31 @@ round trips pass, and clean-machine installation passes. Live Appian deployment 
 execution are reported separately because an offline application cannot prove runtime
 behavior inside an Appian environment.
 
-Current standing against that gate: automated checks pass and package round trips pass,
-including the full 2,624-object rebuild. Rendered UI checks (R27, R28, R29) now have a
-green 18-test run and a 40-item visual acceptance pass. One condition remains unmet:
-clean-machine installation (R31) has a hash-verified artifact
-but no install on a machine without the development toolchain, so the full reference
-workflow has never been driven through the installed application. Until that clears,
-this application is not "flawless" and should not be described as such.
+Current standing against that gate: automated checks pass (217 passed, 2 skipped) and
+package round trips pass, including the full 2,624-object rebuild. Rendered UI checks
+(R27, R28, R29) have a green 18-test run and a 40-item visual acceptance pass.
+
+An independent audit of R1-R31 on 2026-09-19 found that several statuses above claimed
+more than their evidence proved. Those statuses have been corrected rather than the
+evidence restated. The audit also drove three real defects out of hiding, all of which
+were invisible to the suite because the UI tests mocked the sidecar, the API tests ran
+same-origin without a token, and object-create was only ever tested on the content tier:
+the WebSocket token could not be sent by a browser, the CORS preflight was rejected by
+the token middleware, and created record types and process models could not be parsed
+back by this project's own parser.
+
+Open gaps, in priority order:
+
+1. R31 clean-machine installed GUI run of the full import and rebuild workflow.
+2. R10/R1 icon catalog is truncated (`is_complete is False`), so invented icons outside
+   the merged set are warnings rather than hard rejects.
+3. R20 generation is proven on the content tier only; record-type and process-model
+   generation through the agent or MCP is untested.
+4. CI runs neither the corpus gates nor Playwright, PyInstaller, frozen-sidecar, or
+   desktop-boot checks, so a clean clone verifies less than this machine does.
+5. The Windows Job Object has no automated test and falls back with a WARN, which
+   weakens the "stop the sidecar safely" claim.
+6. R27 explorer breadth is proven for expression rules only in the rendered UI.
+
+Until at least the first of these clears, this application is not "flawless" and should
+not be described as such.

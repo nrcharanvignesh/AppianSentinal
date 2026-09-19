@@ -16,9 +16,10 @@ emits full or patch ZIP packages. Python 3.11+ is required.
 Declared in `pyproject.toml`: runtime deps plus optional extras `dev`
 (pytest, pytest-asyncio, ruff) and `build` (PyInstaller).
 
-`pip install -e .` does not work with current setuptools. The file names
-build-backend `setuptools.backends._legacy:_Backend`, which is not importable.
-Until that line is changed, install deps from source:
+`pip install -e .` works: `build-backend` is `setuptools.build_meta` and
+`python -m pip install -e . --no-deps --dry-run` reports
+"Would install appian-sentinel-0.1.0". To install the dev dependencies from
+source instead:
 
 ```
 python scripts/install_dev.py
@@ -29,9 +30,9 @@ Tests import `appian_sentinel` from this repository (cwd on `sys.path`).
 ## Clean checkout: run every check
 
 From the repository root. These commands were run on this tree and exited 0.
-`python -m pytest -q` here was 172 passed, 2 skipped (full Appian export present
-on disk). A checkout without `./appian_export/` also skips the full-inventory
-test, so expect 3 skipped and still exit 0.
+`python -m pytest -q` here was 215 passed, 2 skipped. A checkout without
+`./appian_export/` also skips the full-inventory test, so expect 3 skipped and
+still exit 0.
 
 ```
 python scripts/install_dev.py

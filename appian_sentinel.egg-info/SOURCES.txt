@@ -3,6 +3,7 @@ pyproject.toml
 appian_sentinel/__init__.py
 appian_sentinel/config.py
 appian_sentinel/main.py
+appian_sentinel/security.py
 appian_sentinel/sidecar.py
 appian_sentinel.egg-info/PKG-INFO
 appian_sentinel.egg-info/SOURCES.txt
@@ -60,6 +61,8 @@ appian_sentinel/tester/__init__.py
 appian_sentinel/tester/sail_validator.py
 appian_sentinel/tester/test_generator.py
 appian_sentinel/tester/test_runner.py
+appian_sentinel/testing/__init__.py
+appian_sentinel/testing/synthetic_export.py
 appian_sentinel/web/__init__.py
 appian_sentinel/web/routes.py
 appian_sentinel/web/websocket.py
@@ -70,12 +73,16 @@ tests/test_clarifying_questions.py
 tests/test_codebase_inventory.py
 tests/test_desktop_api.py
 tests/test_fix_loop_convergence.py
+tests/test_frozen_sidecar_workflow.py
 tests/test_generated_coverage.py
 tests/test_generated_object_validation.py
+tests/test_history_mutations.py
 tests/test_icon_enum_validation.py
 tests/test_knowledge_ground_truth.py
 tests/test_llm_protocols.py
 tests/test_mcp_blueprint_e2e.py
+tests/test_mcp_generation_tools.py
+tests/test_mcp_tool_inventory.py
 tests/test_mcp_tools.py
 tests/test_object_writer_roundtrip.py
 tests/test_package_equivalence.py
@@ -83,6 +90,7 @@ tests/test_packaging_roundtrip.py
 tests/test_progress_reporting.py
 tests/test_requirement_intake.py
 tests/test_sail_diagnostics.py
+tests/test_secret_logging.py
 tests/test_settings_persistence.py
 tests/test_test_coverage.py
 tests/test_workflow_results.py
