@@ -54,11 +54,17 @@ async def require_loopback_token(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    """Require the optional desktop token except for the liveness probe."""
+    """Require the optional desktop token except for the liveness probe.
+
+    A CORS preflight is exempt because a browser never attaches custom headers
+    to it. Rejecting the preflight strips the CORS headers and the renderer
+    sees "Failed to fetch". The actual request that follows is still checked.
+    """
     token = os.environ.get("SENTINEL_API_TOKEN")
     supplied = request.headers.get("X-Sentinel-Token", "")
     if (
         token
+        and request.method != "OPTIONS"
         and request.url.path != "/api/health"
         and not hmac.compare_digest(supplied, token)
     ):

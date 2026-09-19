@@ -102,7 +102,7 @@ checks pass.
 19. Provide the central streaming chatbot.
     - Preserve session state, reconnect safely, and show actionable failures.
     - Acceptance: chat works through WebSocket and HTTP fallback.
-    - Status: MET. `tests/test_chat_transports.py` drives both paths: WebSocket streaming via `TestClient.websocket_connect` and the `POST /api/chat` HTTP fallback. Defect found and fixed here: `/ws` only accepted the token as an `X-Sentinel-Token` header, which a browser cannot set on a handshake, so the packaged desktop UI showed "Sidecar offline" permanently while REST worked and reconnected every 2 seconds. The token now rides the `sentinel-token` subprotocol, headers still work for non-browser clients, and `desktop/scripts/prove-ws-token.mjs` proves it in a real browser: the tokened socket opens and negotiates `sentinel-token`, while untokened and wrong-token sockets are refused.
+    - Status: MET. `tests/test_chat_transports.py` drives both paths: WebSocket streaming via `TestClient.websocket_connect` and the `POST /api/chat` HTTP fallback. Defect found and fixed here: `/ws` only accepted the token as an `X-Sentinel-Token` header, which a browser cannot set on a handshake, so the packaged desktop UI showed "Sidecar offline" permanently while REST worked and reconnected every 2 seconds. The token now rides the `sentinel-token` subprotocol and headers still work for non-browser clients.
 
 20. Create and modify required Appian objects across all three tiers.
     - Use existing object identities and real data-model context; never invent UUIDs.
@@ -170,7 +170,12 @@ checks pass.
     - Start and stop the sidecar safely, bind only to loopback, work without a browser,
       and provide full and patch ZIP downloads.
     - Acceptance: a clean-machine installer test completes the full reference workflow.
-    - Status: PARTIAL. Installer `.cmd` built. Documents install exists. `prove_desktop_boot.py` against that `AppianSentinel.exe` returned health 200 on 7842 and UI bound on 8888 (`boot_exit=0`). Frozen sidecar pytest covers upload, package, download. STILL NOT MET: clean-machine GUI of the full ZIP import/rebuild workflow.
+    - Status: PARTIAL. Installer `.cmd` built. Documents install exists. `prove_desktop_boot.py` against that `AppianSentinel.exe` returned health 200 on 7842 and UI bound on 8888 (`boot_exit=0`). Frozen sidecar pytest covers upload, package, download.
+    - Two defects that only the installed GUI exposed, both now fixed and both invisible to the prior suite because every UI test mocked the sidecar and every API test was same-origin with no token:
+        1. `/ws` accepted the token only as an `X-Sentinel-Token` header, which a browser cannot set on a handshake, so the app showed "Sidecar offline" permanently and reconnected every 2 seconds. The token now rides the `sentinel-token` subprotocol.
+        2. The token middleware rejected the CORS preflight with 401 and no CORS headers, so every cross-origin REST call from the renderer on 8888 to the sidecar on 7842 died as "Failed to fetch" and the Object Explorer showed "Could not load objects". `OPTIONS` is now exempt; the real request is still gated.
+    - `desktop/scripts/prove-renderer-auth.mjs` is the regression gate for both. It runs a real browser on a real separate origin against the frozen sidecar with a token set, and proves the tokened REST call and the tokened socket succeed while untokened and wrong-token attempts are refused.
+    - STILL NOT MET: clean-machine GUI of the full ZIP import/rebuild workflow.
 
 ## Release gate
 

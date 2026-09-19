@@ -102,6 +102,27 @@ def test_optional_token_middleware(
     assert response.status_code == 200
 
 
+def test_cors_preflight_survives_token_middleware(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The renderer is a cross-origin browser client: preflight carries no token."""
+    monkeypatch.setenv("SENTINEL_API_TOKEN", "secret")
+    response = client.options(
+        "/api/codebase",
+        headers={
+            "Origin": "http://127.0.0.1:8888",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-sentinel-token",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    # The real request is still gated.
+    assert client.get("/api/status", headers={"Origin": "http://127.0.0.1:8888"}).status_code == 401
+
+
 def test_history_endpoints_use_loaded_export(
     client: TestClient,
     tmp_path: Path,

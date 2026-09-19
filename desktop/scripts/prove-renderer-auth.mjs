@@ -1,12 +1,16 @@
-// Prove a real Chromium WebSocket authenticates against a token-protected
-// sidecar. TestClient does not enforce subprotocol echo; a browser does.
+// Prove the renderer's two authenticated paths against a token-protected
+// sidecar using a real browser from a real cross-origin page. TestClient
+// enforces neither WebSocket subprotocol echo nor CORS preflight; a browser
+// enforces both, and each has already shipped broken once.
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.SENTINEL_PROOF_PORT || 7899);
+const ORIGIN_PORT = PORT + 1;
 const TOKEN = 'proof-token-4f2a';
 const SIDECAR = process.env.SENTINEL_PROOF_SIDECAR || join(
   process.env.USERPROFILE || '',
@@ -80,9 +84,37 @@ function spawnSidecar() {
   return spawn(SIDECAR, [], { env, stdio: 'ignore' });
 }
 
+// A distinct origin, exactly like the renderer on 8888 calling the sidecar.
+function startOriginServer() {
+  const server = createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end('<!doctype html><title>proof</title>');
+  });
+  return new Promise((resolve) => {
+    server.listen(ORIGIN_PORT, HOST, () => resolve(server));
+  });
+}
+
+async function crossOriginFetch(page, token) {
+  return page.evaluate(
+    async ([url, value]) => {
+      try {
+        const response = await fetch(url, {
+          headers: value ? { 'X-Sentinel-Token': value } : {},
+        });
+        return { ok: response.ok, status: response.status };
+      } catch (error) {
+        return { ok: false, status: `failed-to-fetch: ${error.message}` };
+      }
+    },
+    [`http://${HOST}:${PORT}/api/status?session_id=proof`, token]
+  );
+}
+
 async function main() {
   const sidecar = spawnSidecar();
   if (!sidecar) return 2;
+  const originServer = await startOriginServer();
   let browser;
   try {
     if (!(await waitForHealth(Date.now() + 60000))) {
@@ -94,6 +126,21 @@ async function main() {
       channel: process.env.SENTINEL_PW_CHANNEL || 'msedge',
     });
     const page = await browser.newPage();
+    await page.goto(`http://${HOST}:${ORIGIN_PORT}/`);
+
+    const allowed = await crossOriginFetch(page, TOKEN);
+    if (!allowed.ok) {
+      log('ERROR', `cross-origin REST with token failed: ${JSON.stringify(allowed)}`);
+      return 1;
+    }
+    log('SUCCESS', 'cross-origin REST with token passed preflight and returned 200');
+
+    const denied = await crossOriginFetch(page, '');
+    if (denied.ok) {
+      log('ERROR', 'cross-origin REST without token was accepted');
+      return 1;
+    }
+    log('SUCCESS', `cross-origin REST without token refused: ${JSON.stringify(denied)}`);
 
     const authorized = await connect(page, ['sentinel-token', TOKEN]);
     if (!authorized.open || authorized.protocol !== 'sentinel-token') {
@@ -118,6 +165,7 @@ async function main() {
     return 0;
   } finally {
     await browser?.close();
+    originServer.close();
     sidecar.kill();
   }
 }
