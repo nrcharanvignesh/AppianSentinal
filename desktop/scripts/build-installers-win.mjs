@@ -70,7 +70,7 @@ async function fileSha256(filePath) {
   return hash.digest('hex');
 }
 
-function wrapperHeader(bytes, sha256) {
+function wrapperHeader(bytes, sha256, asarSha256) {
   return `@echo off
 setlocal
 title Appian Sentinel Install
@@ -97,6 +97,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $ExpectedBytes = ${bytes}
 $ExpectedSha256 = '${sha256}'
+$ExpectedAsarSha256 = '${asarSha256}'
 $Self = $env:_SENTINEL_SELF
 $Setup = Join-Path $env:SENTINEL_SCRATCH 'AppianSentinel-Setup.exe'
 $Bundle = ':' + 'BUNDLE'
@@ -125,6 +126,17 @@ New-Item -ItemType Directory -Force -Path $env:SENTINEL_INSTALL_DIR | Out-Null
 $env:SENTINEL_NSIS_INSTDIR = $env:SENTINEL_INSTALL_DIR
 $process = Start-Process -FilePath $Setup -ArgumentList @('/S', "/D=$env:SENTINEL_INSTALL_DIR") -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "NSIS exited $($process.ExitCode)" }
+# NSIS reports success even when a running app locks app.asar and the copy is
+# skipped, which silently leaves the previous build installed.
+$installedAsar = Join-Path $env:SENTINEL_INSTALL_DIR 'resources\app.asar'
+# NSIS can return before the last copy is visible to Test-Path.
+$deadline = [datetime]::UtcNow.AddSeconds(30)
+while (-not (Test-Path -LiteralPath $installedAsar) -and [datetime]::UtcNow -lt $deadline) {
+  Start-Sleep -Milliseconds 500
+}
+if (-not (Test-Path -LiteralPath $installedAsar)) { throw 'installed app.asar is missing' }
+$installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedAsar).Hash.ToLowerInvariant()
+if ($installedHash -ne $ExpectedAsarSha256) { throw 'installed app.asar does not match this build; close Appian Sentinel and install again' }
 Write-Host '[SUCCESS] Appian Sentinel installed'
 :BUNDLE
 `;
@@ -156,11 +168,18 @@ try {
   run('npm', ['run', 'build:desktop'], join(workRoot, 'desktop'));
 
   const releaseDir = join(workRoot, 'desktop', 'release', 'desktop');
-  const setup = readdirSync(releaseDir)
-    .filter((name) => name.endsWith('.exe') && !name.toLowerCase().includes('uninstall'))
-    .map((name) => join(releaseDir, name))
-    .find((candidate) => existsSync(candidate));
-  if (!setup) throw new Error(`NSIS setup executable is missing under ${releaseDir}`);
+  const setupNames = readdirSync(releaseDir).filter((name) => {
+    const lower = name.toLowerCase();
+    return lower.endsWith('.exe')
+      && lower !== 'appiansentinel-setup.exe'
+      && !lower.includes('uninstall');
+  });
+  if (setupNames.length !== 1) {
+    throw new Error(
+      `expected one newly built NSIS setup under ${releaseDir}; found ${setupNames.length}`
+    );
+  }
+  const setup = join(releaseDir, setupNames[0]);
 
   const originalRelease = join(DESKTOP_ROOT, 'release', 'desktop');
   mkdirSync(originalRelease, { recursive: true });
@@ -172,7 +191,10 @@ try {
   mkdirSync(outputDir, { recursive: true });
   const bytes = statSync(stableSetup).size;
   const sha256 = await fileSha256(stableSetup);
-  writeFileSync(output, wrapperHeader(bytes, sha256), 'ascii');
+  const builtAsar = join(releaseDir, 'win-unpacked', 'resources', 'app.asar');
+  if (!existsSync(builtAsar)) throw new Error(`packed app.asar is missing under ${builtAsar}`);
+  const asarSha256 = await fileSha256(builtAsar);
+  writeFileSync(output, wrapperHeader(bytes, sha256, asarSha256), 'ascii');
   await appendBase64Payload(output, stableSetup);
   console.log(`[SUCCESS] delivery artifact written to ${output}`);
 } finally {

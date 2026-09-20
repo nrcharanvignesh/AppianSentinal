@@ -13,6 +13,7 @@ from typing import Any
 
 from appian_sentinel.analyzer.llm_client import LLMClient, llm
 from appian_sentinel.models.test_case import (
+    AppianAssertionType,
     TestCase,
     TestCasePriority,
     TestCaseType,
@@ -39,6 +40,9 @@ For each test case, produce a JSON object with:
 - "preconditions": list of strings
 - "steps": list of {"action": str, "input_data": dict, "expected_output": str}
 - "expected_result": overall expected outcome
+- "assertion_type": one of "completes_without_error", "output_equals", "expression"
+- "asserted_output": exact typed output for "output_equals", otherwise null
+- "assertion_expression": SAIL Boolean expression for "expression", otherwise ""
 - "priority": one of "critical", "high", "medium", "low"
 
 Return a JSON object:
@@ -55,6 +59,9 @@ Requirements:
 4. Include REGRESSION tests when modifying existing objects.
 5. Include PERFORMANCE and ACCESSIBILITY tests for applicable scenarios.
 6. Map every test case to at least one acceptance criterion.
+7. Use Appian assertions: exact output for stable scalar results, or one focused
+   Boolean expression using test!output and ri! inputs. Do not group unrelated
+   checks with and(), and do not repeat the rule definition as its own assertion.
 """
 
 _REGRESSION_SYSTEM = """\
@@ -127,6 +134,15 @@ class TestGenerator:
         except ValueError:
             priority_enum = TestCasePriority.MEDIUM
 
+        assertion_type = data.get(
+            "assertion_type",
+            AppianAssertionType.COMPLETES_WITHOUT_ERROR,
+        )
+        try:
+            assertion_type_enum = AppianAssertionType(assertion_type)
+        except ValueError:
+            assertion_type_enum = AppianAssertionType.COMPLETES_WITHOUT_ERROR
+
         return TestCase(
             id=data.get("id", "TC-???"),
             name=data.get("name", "Unnamed test"),
@@ -135,6 +151,9 @@ class TestGenerator:
             preconditions=data.get("preconditions", []),
             steps=steps,
             expected_result=data.get("expected_result", ""),
+            assertion_type=assertion_type_enum,
+            asserted_output=data.get("asserted_output"),
+            assertion_expression=data.get("assertion_expression", ""),
             priority=priority_enum,
         )
 

@@ -126,8 +126,8 @@ async function main() {
     await page.waitForLoadState('domcontentloaded');
     log('INFO', `workbench window at ${page.url()}`);
 
-    await page.getByText('Sidecar online').waitFor({ timeout: BOOT_TIMEOUT_MS });
-    log('SUCCESS', 'installed GUI reports the sidecar online');
+    await page.getByText('Connected', { exact: true }).waitFor({ timeout: BOOT_TIMEOUT_MS });
+    log('SUCCESS', 'installed GUI reports the connection online');
 
     const zipMb = (statSync(REFERENCE_ZIP).size / (1024 * 1024)).toFixed(1);
     log('INFO', `importing reference export (${zipMb} MB); this is the slow step`);

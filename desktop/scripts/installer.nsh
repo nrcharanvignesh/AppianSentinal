@@ -25,7 +25,7 @@
   FileWrite $9 `$$listen=@(& "$$sys\netstat.exe" -ano -p TCP|Where-Object{$$_ -match 'LISTENING'})$\r$\n`
   FileWrite $9 `foreach($$port in 7842,8888){foreach($$line in @($$listen|Where-Object{$$_ -match ":$$port\s"})){$\r$\n`
   FileWrite $9 ` $$id=0;[void][int]::TryParse((($$line.Trim() -split '\s+')[-1]),[ref]$$id);$$q=$$all[$$id]$\r$\n`
-  FileWrite $9 ` if($$q -and (Mine ([string]$$q.ExecutablePath+' '+[string]$$q.CommandLine)){Nuke $$id "port $$port"}$\r$\n`
+  FileWrite $9 ` if($$q -and (Mine ([string]$$q.ExecutablePath+' '+[string]$$q.CommandLine))){Nuke $$id "port $$port"}$\r$\n`
   FileWrite $9 `}}$\r$\n`
   FileClose $9
   nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\sentinel-force-close.ps1" "$INSTDIR" "${APP_EXECUTABLE_FILENAME}"'

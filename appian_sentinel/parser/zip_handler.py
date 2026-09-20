@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from appian_sentinel.models.object_registry import official_export_directories
 from appian_sentinel.parser.codebase_map import (
     parse_export_log,
     parse_manifest,
@@ -27,24 +28,7 @@ _REQUIRED_PATHS = [
 ]
 
 # Directories that may appear in the export (not all are mandatory)
-_KNOWN_DIRECTORIES = {
-    "META-INF",
-    "application",
-    "content",
-    "processModel",
-    "recordType",
-    "datatype",
-    "dataStore",
-    "webApi",
-    "connectedSystem",
-    "site",
-    "group",
-    "translationString",
-    "translationSet",
-    "portal",
-    "processModelFolder",
-    "tempoReport",
-}
+_KNOWN_DIRECTORIES = official_export_directories()
 
 
 def extract_appian_zip(zip_path: Path, target_dir: Path) -> Path:

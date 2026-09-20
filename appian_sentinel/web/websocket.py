@@ -11,6 +11,10 @@ from appian_sentinel.agent.state import ChatMessage
 
 logger = logging.getLogger(__name__)
 
+# Messages a reconnecting client gets for context, on top of anything the
+# previous connection failed to deliver.
+HISTORY_WINDOW = 100
+
 
 class ChatWebSocket:
     """Manages a single WebSocket connection tied to an agent session.
@@ -82,7 +86,12 @@ class ChatWebSocket:
             content = data.get("content", "").strip()
             if not content:
                 return
-            async for msg in self.orchestrator.process_user_message(content):
+            raw_uuids = data.get("object_uuids") or []
+            object_uuids = [str(item) for item in raw_uuids if item]
+            async for msg in self.orchestrator.process_user_message(
+                content,
+                object_uuids=object_uuids,
+            ):
                 await self._push_message(msg)
 
         elif msg_type == "answer":
@@ -107,32 +116,64 @@ class ChatWebSocket:
     # ------------------------------------------------------------------
 
     async def _push_message(self, msg: ChatMessage) -> None:
-        """Serialize a ChatMessage and send it to the client."""
-        if self._closed:
-            return
+        """Send one ChatMessage, recording whether the client received it.
+
+        The message is already in ``AgentState`` before it reaches here, so a
+        drop costs delivery only: the next connection replays it.
+        """
         payload = {
             "type": "message",
             "data": msg.model_dump(),
         }
-        await self._push_json(payload)
+        if await self._push_json(payload):
+            self.orchestrator.delivered_message_id = msg.id
+        else:
+            self.orchestrator.stream_interrupted = True
 
-    async def _push_json(self, payload: dict[str, Any]) -> None:
+    async def _push_json(self, payload: dict[str, Any]) -> bool:
+        """Send one frame, reporting whether it reached the client."""
         if self._closed:
-            return
+            return False
         try:
             await self.ws.send_text(json.dumps(payload, default=str))
         except Exception:
-            logger.debug("Failed to send WS frame; connection may be closed.")
+            logger.warning("Failed to send WS frame; connection may be closed.")
             self._closed = True
+            return False
+        return True
+
+    def _replay_window(self) -> tuple[list[ChatMessage], int]:
+        """Return the messages to resend and how many the last socket missed.
+
+        Undelivered messages are always replayed in full, even when there are
+        more than the usual history window, so a reconnecting client is never
+        silently short of the answer it was waiting for.
+        """
+        messages = self.orchestrator.state.messages
+        delivered = self.orchestrator.delivered_message_id
+        missed = 0
+        if delivered:
+            for index, message in enumerate(messages):
+                if message.id == delivered:
+                    missed = len(messages) - index - 1
+                    break
+        return messages[-max(missed, HISTORY_WINDOW):], missed
 
     async def _send_state_snapshot(self) -> None:
         """Push a full state summary to the client (used on connect / reconnect)."""
+        replay, missed = self._replay_window()
         payload = {
             "type": "state",
             "data": self.orchestrator.state.to_summary(),
-            "messages": [m.model_dump() for m in self.orchestrator.state.messages[-100:]],
+            "messages": [m.model_dump() for m in replay],
             "pending_questions": [
                 q.model_dump() for q in self.orchestrator.state.unanswered_questions()
             ],
+            # The UI needs to distinguish a dropped stream from a slow answer.
+            "stream_interrupted": self.orchestrator.stream_interrupted,
+            "missed_messages": missed,
         }
-        await self._push_json(payload)
+        if await self._push_json(payload):
+            self.orchestrator.stream_interrupted = False
+            if replay:
+                self.orchestrator.delivered_message_id = replay[-1].id

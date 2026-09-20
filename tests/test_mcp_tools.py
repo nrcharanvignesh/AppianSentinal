@@ -11,13 +11,17 @@ from pydantic import ValidationError
 from appian_sentinel.config import settings
 from appian_sentinel.mcp_server import cache, server, tools
 from appian_sentinel.mcp_server.models import (
+    BulkReplaceTestsRequest,
     DependencyDirection,
     DependencyGraphRequest,
     GenerateFullZipRequest,
+    GetCodebaseRequest,
+    GetObjectTestsRequest,
     InspectSailRequest,
     ListObjectsRequest,
     NormalizeRequirementRequest,
     ResolveObjectRequest,
+    RunObjectStaticTestRequest,
     RunStaticTestsRequest,
     ValidateSailRequest,
     ValidateTestCoverageRequest,
@@ -104,6 +108,7 @@ async def test_server_preserves_blueprint_and_original_tool_names() -> None:
     assert {
         "list_objects",
         "resolve_object",
+        "get_codebase",
         "get_dependency_graph",
         "inspect_sail",
         "validate_sail",
@@ -112,6 +117,8 @@ async def test_server_preserves_blueprint_and_original_tool_names() -> None:
         "normalize_requirement",
         "validate_test_coverage",
         "run_static_tests",
+        "get_object_tests",
+        "run_object_static_test",
         "workspace_status",
         "history_log",
         "history_diff",
@@ -129,6 +136,7 @@ async def test_new_tool_contracts_are_typed() -> None:
     for name in (
         "list_objects",
         "resolve_object",
+        "get_codebase",
         "get_dependency_graph",
         "inspect_sail",
         "validate_sail",
@@ -137,6 +145,9 @@ async def test_new_tool_contracts_are_typed() -> None:
         "normalize_requirement",
         "validate_test_coverage",
         "run_static_tests",
+        "get_object_tests",
+        "run_object_static_test",
+        "bulk_replace_tests",
         "generate_full_zip",
     ):
         assert registered[name].inputSchema["properties"]["request"]
@@ -175,6 +186,70 @@ def test_original_python_signatures_remain_compatible() -> None:
         "object_uuids",
         "output_path",
     ]
+
+
+def test_get_object_tests_returns_embedded_cases(
+    workspace: tuple[Path, CodebaseMap],
+) -> None:
+    export_dir, codebase = workspace
+    source_path = Path(codebase.objects["interface-1"].file_path)
+    source_path.write_text(
+        """
+        <contentHaul>
+          <interface>
+            <uuid>interface-1</uuid>
+            <definition>a!textField(label: "Name")</definition>
+            <test>
+              <name>Positive value</name>
+              <description>Accepts a normal value.</description>
+              <inputs><input name="value" value="10"/></inputs>
+              <expected>10</expected>
+            </test>
+          </interface>
+        </contentHaul>
+        """,
+        encoding="utf-8",
+    )
+
+    result = tools.get_object_tests(GetObjectTestsRequest(
+        export_dir=str(export_dir),
+        object_uuid="interface-1",
+    ))
+
+    assert result.object_uuid == "interface-1"
+    assert len(result.tests) == 1
+    assert result.tests[0].name == "Positive value"
+    assert result.tests[0].inputs == {"value": "10"}
+
+
+def test_run_object_static_test_is_explicitly_non_executing(
+    workspace: tuple[Path, CodebaseMap],
+) -> None:
+    export_dir, _ = workspace
+    result = tools.run_object_static_test(RunObjectStaticTestRequest(
+        export_dir=str(export_dir),
+        object_uuid="interface-1",
+        inputs={"value": {"mode": "static", "value": "10"}},
+    ))
+
+    assert result.object_uuid == "interface-1"
+    assert result.evaluated is False
+    assert result.is_valid is True
+    assert "no Appian engine" in result.note
+
+
+def test_get_codebase_returns_object_explorer_indices(
+    workspace: tuple[Path, CodebaseMap],
+) -> None:
+    export_dir, _ = workspace
+    result = tools.get_codebase(GetCodebaseRequest(export_dir=str(export_dir)))
+
+    assert result.by_type == {
+        "interface": ["interface-1", "interface-2"],
+        "constant": ["constant-1"],
+    }
+    assert result.descriptions["interface-1"] == "First interface"
+    assert result.reverse_dependencies["constant-1"] == ["interface-1"]
 
 
 def test_list_objects_filters_and_paginates(
@@ -454,6 +529,98 @@ def test_bulk_add_tests_previews_then_updates(
     tree = etree.parse(str(target))
     assert updated.status == "updated"
     assert len(tree.xpath("//*[local-name()='testCase']")) == 1
+
+
+def test_bulk_replace_tests_accepts_structured_cases(
+    workspace: tuple[Path, CodebaseMap],
+) -> None:
+    export_dir, _ = workspace
+    target = export_dir / "content" / "interface-1.xml"
+    target.write_text(
+        """
+        <contentHaul>
+          <interface>
+            <uuid>interface-1</uuid>
+            <definition>a!textField(label: "Name")</definition>
+            <testCase name="template">
+              <description>template</description>
+              <inputs><input name="value" value="0"/></inputs>
+              <expected>0</expected>
+            </testCase>
+            <testCase name="expression-template">
+              <description>template</description>
+              <inputs><input name="value" value="0"/></inputs>
+              <assertionExpression>not(isnull(test!output))</assertionExpression>
+            </testCase>
+            <testCase name="no-error-template">
+              <description>template</description>
+              <inputs><input name="value" value="0"/></inputs>
+            </testCase>
+          </interface>
+        </contentHaul>
+        """,
+        encoding="utf-8",
+    )
+    request = BulkReplaceTestsRequest(
+        export_dir=str(export_dir),
+        object_uuids=["interface-1"],
+        tests=[{
+            "name": "Positive value",
+            "description": "Accepts a normal value.",
+            "inputs": {"value": 10},
+            "expected": 10,
+        }, {
+            "name": "Output is populated",
+            "description": "Rejects a null result.",
+            "inputs": {"value": 10},
+            "assertion_type": "expression",
+            "assertion_expression": "not(isnull(test!output))",
+        }, {
+            "name": "Evaluation succeeds",
+            "description": "Completes without an evaluation error.",
+            "inputs": {"value": 10},
+            "assertion_type": "completes_without_error",
+        }],
+        preview=False,
+    )
+
+    result = tools.bulk_replace_tests(request)
+    tree = etree.parse(str(target))
+
+    assert result.status == "updated"
+    assert len(tree.xpath("//*[local-name()='testCase']")) == 3
+    assert tree.xpath("string(//*[local-name()='testCase'][1]/@name)") == "Positive value"
+    assert tree.xpath("string(//*[local-name()='testCase'][1]/*[local-name()='expected'])") == "10"
+    assert tree.xpath(
+        "string(//*[local-name()='testCase'][2]/*[local-name()='assertionExpression'])"
+    ) == "not(isnull(test!output))"
+    assert not tree.xpath(
+        "//*[local-name()='testCase'][3]/*[local-name()='expected' or "
+        "local-name()='assertionExpression']"
+    )
+    readback = tools.get_object_tests(GetObjectTestsRequest(
+        export_dir=str(export_dir),
+        object_uuid="interface-1",
+    ))
+    assert [test.assertion_type.value for test in readback.tests] == [
+        "output_equals",
+        "expression",
+        "completes_without_error",
+    ]
+    assert readback.tests[1].assertion_expression == "not(isnull(test!output))"
+
+
+def test_bulk_replace_tests_rejects_vacuous_expression_assertion() -> None:
+    with pytest.raises(ValueError, match="test!output"):
+        BulkReplaceTestsRequest(
+            export_dir=".",
+            object_uuids=["rule-1"],
+            tests=[{
+                "name": "Vacuous assertion",
+                "assertion_type": "expression",
+                "assertion_expression": "ri!value > 0",
+            }],
+        )
 
 
 def test_full_zip_packages_without_mutating_source(

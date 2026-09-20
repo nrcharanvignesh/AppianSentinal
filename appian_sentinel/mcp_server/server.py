@@ -16,7 +16,10 @@ from appian_sentinel.mcp_server import tools
 from appian_sentinel.mcp_server.models import (
     ApplySailEditResponse,
     BulkAddTestsResponse,
+    BulkReplaceTestsRequest,
     CoverageResponse,
+    CreateTypedObjectRequest,
+    DeleteTypedObjectRequest,
     DependencyGraphRequest,
     DependencyGraphResponse,
     GenerateFullZipRequest,
@@ -27,6 +30,10 @@ from appian_sentinel.mcp_server.models import (
     GenerateSolutionDesignResponse,
     GenerateTestSuiteRequest,
     GenerateTestSuiteResponse,
+    GetCodebaseRequest,
+    GetCodebaseResponse,
+    GetObjectTestsRequest,
+    GetObjectTestsResponse,
     HistoryCommitResponse,
     HistoryDiffResponse,
     HistoryLogResponse,
@@ -35,12 +42,17 @@ from appian_sentinel.mcp_server.models import (
     InspectSailResponse,
     ListObjectsRequest,
     ListObjectsResponse,
+    MutationResponse,
     NormalizeRequirementRequest,
     NormalizeRequirementResponse,
     ResolveObjectRequest,
     ResolveObjectResponse,
+    RunObjectStaticTestRequest,
+    RunObjectStaticTestResponse,
     RunStaticTestsRequest,
     StaticTestResult,
+    TypedObjectRequest,
+    UpdateTypedObjectRequest,
     ValidateObjectRequest,
     ValidateObjectResponse,
     ValidateSailRequest,
@@ -50,6 +62,8 @@ from appian_sentinel.mcp_server.models import (
     ValidationResponse,
     WorkspaceStatusResponse,
 )
+from appian_sentinel.models.appian_objects import ObjectType
+from appian_sentinel.models.object_registry import OBJECT_CAPABILITIES
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -131,6 +145,12 @@ def list_objects(request: ListObjectsRequest) -> ListObjectsResponse:
 def resolve_object(request: ResolveObjectRequest) -> ResolveObjectResponse:
     """Resolve an object UUID or exact name and report ambiguity."""
     return tools.resolve_object(request)
+
+
+@mcp.tool(structured_output=True)
+def get_codebase(request: GetCodebaseRequest) -> GetCodebaseResponse:
+    """Return application metadata and object-explorer indices."""
+    return tools.get_codebase(request)
 
 
 @mcp.tool(structured_output=True)
@@ -222,6 +242,20 @@ async def run_static_tests(request: RunStaticTestsRequest) -> StaticTestResult:
 
 
 @mcp.tool(structured_output=True)
+def get_object_tests(request: GetObjectTestsRequest) -> GetObjectTestsResponse:
+    """Return embedded Appian test cases for one rule or interface."""
+    return tools.get_object_tests(request)
+
+
+@mcp.tool(structured_output=True)
+def run_object_static_test(
+    request: RunObjectStaticTestRequest,
+) -> RunObjectStaticTestResponse:
+    """Run ad hoc static analysis for one object with supplied inputs."""
+    return tools.run_object_static_test(request)
+
+
+@mcp.tool(structured_output=True)
 def workspace_status(export_dir: str) -> WorkspaceStatusResponse:
     """Return baseline, HEAD, staged, and working-tree status."""
     return tools.workspace_status(export_dir)
@@ -305,9 +339,88 @@ def bulk_add_tests(
 
 
 @mcp.tool(structured_output=True)
+def bulk_replace_tests(request: BulkReplaceTestsRequest) -> BulkAddTestsResponse:
+    """Preview or replace Appian tests with typed output or SAIL assertions."""
+    return tools.bulk_replace_tests(request)
+
+
+@mcp.tool(structured_output=True)
 def generate_full_zip(request: GenerateFullZipRequest) -> GenerateFullZipResponse:
     """Build a source-pure full ZIP at a new isolated output path."""
     return tools.generate_full_zip(request)
+
+
+def _register_typed_crud() -> None:
+    """Register create/get/update/delete tools for each official Designer type."""
+
+    def bind_create(object_type: ObjectType):
+        def create_tool(request: CreateTypedObjectRequest) -> MutationResponse:
+            return tools.create_typed(object_type, request)
+
+        return create_tool
+
+    def bind_get(object_type: ObjectType):
+        def get_tool(request: TypedObjectRequest) -> MutationResponse:
+            return tools.get_typed(object_type, request)
+
+        return get_tool
+
+    def bind_update(object_type: ObjectType):
+        def update_tool(request: UpdateTypedObjectRequest) -> MutationResponse:
+            return tools.update_typed(object_type, request)
+
+        return update_tool
+
+    def bind_delete(object_type: ObjectType):
+        def delete_tool(request: DeleteTypedObjectRequest) -> MutationResponse:
+            return tools.delete_typed(object_type, request)
+
+        return delete_tool
+
+    for capability in OBJECT_CAPABILITIES:
+        official = capability.official_name
+        article = "an" if official[0].lower() in "aeiou" else "a"
+        create_tool = bind_create(capability.object_type)
+        get_tool = bind_get(capability.object_type)
+        update_tool = bind_update(capability.object_type)
+        delete_tool = bind_delete(capability.object_type)
+        create_tool.__name__ = capability.create_tool
+        get_tool.__name__ = capability.get_tool
+        update_tool.__name__ = capability.update_tool
+        delete_tool.__name__ = capability.delete_tool
+        if capability.requires_template:
+            create_tool.__doc__ = (
+                f"Create {article} {official}. export_dir, name, and the "
+                "template_uuid of a same-type object are required."
+            )
+        else:
+            create_tool.__doc__ = (
+                f"Create {article} {official}. export_dir and name are required; "
+                "fields and template_uuid are optional."
+            )
+        get_tool.__doc__ = (
+            f"Return one {official}. export_dir and object_uuid are required."
+        )
+        update_tool.__doc__ = (
+            f"Update one {official}. export_dir and object_uuid are required; fields "
+            "is optional and preview defaults to false."
+        )
+        delete_tool.__doc__ = (
+            f"Delete one {official}. export_dir and object_uuid are required. preview "
+            "defaults to true. Reverse dependencies block deletion unless force is true; "
+            "this tool does not request interactive approval."
+        )
+        mcp.tool(name=capability.create_tool, structured_output=True)(create_tool)
+        mcp.tool(name=capability.get_tool, structured_output=True)(get_tool)
+        mcp.tool(name=capability.update_tool, structured_output=True)(update_tool)
+        mcp.tool(name=capability.delete_tool, structured_output=True)(delete_tool)
+        globals()[capability.create_tool] = create_tool
+        globals()[capability.get_tool] = get_tool
+        globals()[capability.update_tool] = update_tool
+        globals()[capability.delete_tool] = delete_tool
+
+
+_register_typed_crud()
 
 
 def main() -> None:

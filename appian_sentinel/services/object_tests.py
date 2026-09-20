@@ -8,6 +8,9 @@ from typing import Any
 
 from lxml import etree
 
+from appian_sentinel.models.test_case import AppianAssertionType
+from appian_sentinel.parser.sail_ast import validate_syntax
+
 
 class UnsupportedTestCaseError(ValueError):
     """The object XML does not expose a reusable test-case schema."""
@@ -25,10 +28,12 @@ def extract_test_cases(xml_path: Path) -> list[dict[str, Any]]:
             "name": _field_text(node, ("name",)) or node.get("name", ""),
             "description": _field_text(node, ("description",)),
             "inputs": _extract_inputs(node),
+            "assertion_type": _assertion_type(node).value,
             "expected": _field_text(
                 node,
-                ("expected", "expectedOutput", "assertionExpression"),
+                ("expected", "expectedOutput"),
             ),
+            "assertion_expression": _field_text(node, ("assertionExpression",)),
             "xml": etree.tostring(node, encoding="unicode", with_tail=False),
         }
         for node in nodes
@@ -44,17 +49,37 @@ def clone_test_nodes(
     existing = _test_nodes(xml_path)
     if not existing:
         raise UnsupportedTestCaseError("no_test_case_template")
-    template = existing[0]
     result: list[str] = []
     for test in tests:
+        assertion_type = AppianAssertionType(
+            test.get("assertion_type", AppianAssertionType.OUTPUT_EQUALS),
+        )
+        template = next(
+            (node for node in existing if _assertion_type(node) is assertion_type),
+            None,
+        )
+        if template is None:
+            raise UnsupportedTestCaseError(
+                f"no_{assertion_type.value}_test_case_template"
+            )
         node = deepcopy(template)
         _set_field(node, ("name",), str(test["name"]), attribute="name")
         _set_field(node, ("description",), str(test["description"]))
-        _set_field(
-            node,
-            ("expected", "expectedOutput", "assertionExpression"),
-            _value_text(test["expected"]),
-        )
+        if assertion_type is AppianAssertionType.OUTPUT_EQUALS:
+            _set_field(
+                node,
+                ("expected", "expectedOutput"),
+                _value_text(test.get("expected")),
+            )
+        elif assertion_type is AppianAssertionType.EXPRESSION:
+            expression = str(test.get("assertion_expression", "")).strip()
+            if not expression or "test!output" not in expression.casefold():
+                raise UnsupportedTestCaseError(
+                    "assertion_expression_must_reference_test_output"
+                )
+            if validate_syntax(expression):
+                raise UnsupportedTestCaseError("assertion_expression_has_invalid_sail")
+            _set_field(node, ("assertionExpression",), expression)
         _set_inputs(node, dict(test["inputs"]))
         result.append(etree.tostring(node, encoding="unicode", with_tail=False))
     return result
@@ -81,6 +106,21 @@ def _field_text(node: etree._Element, names: tuple[str, ...]) -> str:
         if matches:
             return str(matches[0].text or "")
     return ""
+
+
+def _assertion_type(node: etree._Element) -> AppianAssertionType:
+    marker = _field_text(node, ("assertionType",)).strip().casefold()
+    if "expression" in marker:
+        return AppianAssertionType.EXPRESSION
+    if "output" in marker or "match" in marker or "equal" in marker:
+        return AppianAssertionType.OUTPUT_EQUALS
+    if "error" in marker or "complete" in marker:
+        return AppianAssertionType.COMPLETES_WITHOUT_ERROR
+    if node.xpath("./*[local-name()='assertionExpression']"):
+        return AppianAssertionType.EXPRESSION
+    if node.xpath("./*[local-name()='expected' or local-name()='expectedOutput']"):
+        return AppianAssertionType.OUTPUT_EQUALS
+    return AppianAssertionType.COMPLETES_WITHOUT_ERROR
 
 
 def _set_field(

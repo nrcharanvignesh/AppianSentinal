@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from appian_sentinel.agent.orchestrator import Orchestrator
 from appian_sentinel.agent.state import AgentState
+from appian_sentinel.analyzer import pdf_extractor
 from appian_sentinel.config import settings
 from appian_sentinel.models.user_story import (
     ClarifyingQuestion,
@@ -121,6 +122,42 @@ def test_cors_preflight_survives_token_middleware(
     assert response.headers["access-control-allow-origin"] == "*"
     # The real request is still gated.
     assert client.get("/api/status", headers={"Origin": "http://127.0.0.1:8888"}).status_code == 401
+
+
+def test_chat_accepts_multiple_requirement_files(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "sentinel_workspace", tmp_path)
+
+    async def extract(
+        raw_text: str,
+        *,
+        source_id: str,
+        source_kind: str,
+    ) -> UserStory:
+        assert "# Source: story.txt" in raw_text
+        assert "# Source: notes.md" in raw_text
+        return UserStory(
+            title="Combined requirement",
+            raw_text=raw_text,
+            source_id=source_id,
+            source_kind=source_kind,
+        )
+
+    monkeypatch.setattr(pdf_extractor, "extract_user_story_from_text", extract)
+    response = client.post(
+        "/api/stories?session_id=multi-files",
+        files=[
+            ("files", ("story.txt", b"As a requester", "text/plain")),
+            ("files", ("notes.md", b"# Acceptance criteria", "text/markdown")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["files"] == [{"name": "story.txt"}, {"name": "notes.md"}]
+    assert response.json()["story"]["source_kind"] == "files"
 
 
 def test_history_endpoints_use_loaded_export(

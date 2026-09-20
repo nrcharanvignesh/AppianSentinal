@@ -31,6 +31,7 @@ class MessageType(str, Enum):
     DIFF = "diff"
     STATUS = "status"
     ERROR = "error"
+    TOOL = "tool"
 
 
 STEP_NAMES: dict[int, str] = {

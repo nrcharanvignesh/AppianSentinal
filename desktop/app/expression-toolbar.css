@@ -9,10 +9,10 @@
 .expression-toolbar {
   min-height: 38px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   padding: 4px 6px;
-  overflow-x: auto;
 }
 
 .expression-action,

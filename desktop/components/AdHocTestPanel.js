@@ -21,6 +21,7 @@ export default function AdHocTestPanel({
   ruleInputs = [],
   savedTestCases = [],
   onRunTest,
+  showSavedTests = true,
 }) {
   const normalized = useMemo(() => normalizeRuleInputs(ruleInputs), [ruleInputs]);
   const [inputs, setInputs] = useState(normalized);
@@ -193,19 +194,21 @@ export default function AdHocTestPanel({
         )}
       </section>
 
-      <section className="adhoc-section adhoc-saved" aria-labelledby="saved-tests-title">
-        <h2 id="saved-tests-title">Saved Test Cases</h2>
-        {savedTestCases.length ? (
-          <ul>
-            {savedTestCases.map((testCase, index) => (
-              <li key={`${testCase.name || 'test'}-${index}`}>
-                <span>{testCase.name || `Test case ${index + 1}`}</span>
-                <strong>{testCase.status || 'Status unavailable'}</strong>
-              </li>
-            ))}
-          </ul>
-        ) : <p className="adhoc-empty">No saved test cases were supplied.</p>}
-      </section>
+      {showSavedTests && (
+        <section className="adhoc-section adhoc-saved" aria-labelledby="saved-tests-title">
+          <h2 id="saved-tests-title">Saved Test Cases</h2>
+          {savedTestCases.length ? (
+            <ul>
+              {savedTestCases.map((testCase, index) => (
+                <li key={`${testCase.name || 'test'}-${index}`}>
+                  <span>{testCase.name || `Test case ${index + 1}`}</span>
+                  <strong>{testCase.status || 'Status unavailable'}</strong>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="adhoc-empty">No saved test cases were supplied.</p>}
+        </section>
+      )}
     </section>
   );
 }

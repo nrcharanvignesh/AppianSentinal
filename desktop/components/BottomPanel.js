@@ -34,6 +34,7 @@ export default function BottomPanel({
     "name": "Generated test",
     "description": "",
     "inputs": {},
+    "assertion_type": "output_equals",
     "expected": null
   }
 ]`);
@@ -68,14 +69,30 @@ export default function BottomPanel({
       if (!item || typeof item.name !== 'string' || !item.name.trim()) {
         throw new Error('test_name_required');
       }
-      if (!Object.prototype.hasOwnProperty.call(item, 'expected')) {
+      const assertionType = item.assertion_type || 'output_equals';
+      if (!['completes_without_error', 'output_equals', 'expression'].includes(assertionType)) {
+        throw new Error('test_assertion_type_invalid');
+      }
+      if (
+        assertionType === 'output_equals'
+        && !Object.prototype.hasOwnProperty.call(item, 'expected')
+      ) {
         throw new Error('test_expected_required');
+      }
+      const assertionExpression = item.assertion_expression || '';
+      if (
+        assertionType === 'expression'
+        && !assertionExpression.toLowerCase().includes('test!output')
+      ) {
+        throw new Error('test_assertion_expression_must_reference_test_output');
       }
       return {
         name: item.name,
         description: item.description || '',
         inputs: item.inputs || {},
+        assertion_type: assertionType,
         expected: item.expected,
+        assertion_expression: assertionExpression,
       };
     });
   }
@@ -184,6 +201,9 @@ export default function BottomPanel({
                 }}
               />
             </label>
+            <small>
+              Assertions: completes_without_error, output_equals, or expression using test!output.
+            </small>
             <div className="bulk-actions">
               <button
                 type="button"

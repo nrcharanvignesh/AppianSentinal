@@ -116,7 +116,11 @@ export const api = {
     return request(`${endpoint}?session_id=${SESSION_ID}`, { method: 'POST', body });
   },
   uploadApplication: (file) => api.upload('/api/upload', file),
-  uploadStory: (file) => api.upload('/api/story', file),
+  uploadRequirementFiles: (files) => {
+    const body = new FormData();
+    Array.from(files).forEach((file) => body.append('files', file));
+    return request(`/api/stories?session_id=${SESSION_ID}`, { method: 'POST', body });
+  },
   packageFull: () => request(`/api/package?session_id=${SESSION_ID}`, { method: 'POST' }),
   wsUrl: () => `${runtimeApi().wsUrl}/ws?session_id=${SESSION_ID}`,
   // A browser cannot set headers on a WebSocket, so the token rides along as a

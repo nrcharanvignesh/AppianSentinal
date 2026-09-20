@@ -69,6 +69,8 @@ class FakeTestLLM:
                         "linked_ac": "AC-1",
                         "steps": [{"action": "Open", "expected_output": "Form"}],
                         "expected_result": "Form renders",
+                        "assertion_type": "expression",
+                        "assertion_expression": "not(isnull(test!output))",
                         "priority": "high",
                     }
                 ],
@@ -202,6 +204,8 @@ async def test_generate_test_suite_uses_real_object_identity(
 
     assert result.object_uuid == "real-interface-uuid"
     assert [case.id for case in result.suite.test_cases] == ["TC-001"]
+    assert result.suite.test_cases[0].assertion_type.value == "expression"
+    assert result.suite.test_cases[0].assertion_expression == "not(isnull(test!output))"
 
 
 @pytest.mark.asyncio

@@ -4,21 +4,37 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { objectMeta } from '../lib/appian-objects';
 
-export default function ObjectExplorer({ codebase, loading, error, selectedId, onSelect }) {
+export default function ObjectExplorer({
+  codebase,
+  loading,
+  error,
+  selectedId,
+  chatSelectedIds,
+  onSelect,
+  onToggleChat,
+}) {
   const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
   const [expanded, setExpanded] = useState({});
   const treeRef = useRef(null);
 
+  const typeOptions = useMemo(
+    () => Object.keys(codebase?.by_type || {}).sort((a, b) => a.localeCompare(b)),
+    [codebase],
+  );
+
   const groups = useMemo(() => Object.entries(codebase?.by_type || {})
+    .filter(([type]) => !typeFilter || type === typeFilter)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([type, ids]) => ({
       type,
       items: ids.map((uuid) => ({
         uuid,
+        type,
         name: codebase.uuid_to_name?.[uuid] || uuid,
       })).filter((item) => item.name.toLowerCase().includes(query.toLowerCase())
         || item.uuid.toLowerCase().includes(query.toLowerCase())),
-    })).filter((group) => !query || group.items.length), [codebase, query]);
+    })).filter((group) => !query || group.items.length), [codebase, query, typeFilter]);
 
   useEffect(() => {
     if (!codebase) return;
@@ -26,9 +42,32 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
   }, [codebase]);
 
   function moveFocus(event) {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const rows = [...treeRef.current.querySelectorAll('[role="treeitem"]')];
     const current = rows.indexOf(document.activeElement);
+
+    if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+      const active = rows[current];
+      if (!active) return;
+      const groupType = active.dataset.groupType;
+      if (!groupType) {
+        event.preventDefault();
+        active.closest('.tree-group')?.querySelector('.tree-group-button')?.focus();
+        return;
+      }
+      // A search result set is force-expanded, so collapsing it would hide
+      // matches the operator is looking at.
+      const isOpen = query ? true : expanded[groupType];
+      event.preventDefault();
+      if (event.key === 'ArrowRight') {
+        if (isOpen) rows[current + 1]?.focus();
+        else setExpanded((value) => ({ ...value, [groupType]: true }));
+      } else if (isOpen && !query) {
+        setExpanded((value) => ({ ...value, [groupType]: false }));
+      }
+      return;
+    }
+
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
     const target = event.key === 'Home' ? 0
       : event.key === 'End' ? rows.length - 1
         : event.key === 'ArrowDown' ? Math.min(rows.length - 1, current + 1)
@@ -53,6 +92,19 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
         <span aria-hidden="true">/</span>
         <input id="object-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name or UUID" />
       </label>
+      <label className="type-filter-field">
+        <span className="sr-only">Filter object type</span>
+        <select
+          aria-label="Filter object type"
+          value={typeFilter}
+          onChange={(event) => setTypeFilter(event.target.value)}
+        >
+          <option value="">All types</option>
+          {typeOptions.map((type) => (
+            <option key={type} value={type}>{objectMeta(type).label}</option>
+          ))}
+        </select>
+      </label>
       {loading && (
         <div className="tree-state is-loading" role="status">
           <span className="state-spinner" aria-hidden="true" />
@@ -61,8 +113,8 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
       )}
       {!loading && error && (
         <div className="tree-state is-error" role="alert">
-          <strong>Could not load objects: {error}</strong>
-          <span>Check the sidecar connection or import again.</span>
+          <strong>Could not load application objects.</strong>
+          <span>Check the connection or import again.</span>
         </div>
       )}
       {!loading && !error && !codebase && (
@@ -78,11 +130,12 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
         {groups.map((group) => {
           const isOpen = query ? true : expanded[group.type];
           return (
-            <div className="tree-group" key={group.type}>
+            <div className="tree-group" role="none" key={group.type}>
               <button
                 type="button"
                 className="tree-group-button"
                 role="treeitem"
+                data-group-type={group.type}
                 aria-expanded={isOpen}
                 onClick={() => setExpanded((value) => ({ ...value, [group.type]: !isOpen }))}
               >
@@ -93,24 +146,36 @@ export default function ObjectExplorer({ codebase, loading, error, selectedId, o
               {isOpen && (
                 <div role="group">
                   {group.items.map((item) => (
-                    <button
-                      type="button"
-                      role="treeitem"
-                      aria-selected={selectedId === item.uuid}
+                    <div
                       className={`object-row ${selectedId === item.uuid ? 'is-selected' : ''}`}
                       key={item.uuid}
-                      title={`${item.name}\n${item.uuid}`}
-                      onClick={() => onSelect(item)}
                     >
-                      <span
-                        className="object-icon"
-                        aria-hidden="true"
-                        style={{ background: objectMeta(group.type).color }}
+                      <input
+                        type="checkbox"
+                        checked={chatSelectedIds.includes(item.uuid)}
+                        aria-label={chatSelectedIds.includes(item.uuid)
+                          ? `Remove ${item.name} from chat`
+                          : `Add ${item.name} to chat`}
+                        onChange={() => onToggleChat(item)}
+                      />
+                      <button
+                        type="button"
+                        role="treeitem"
+                        aria-selected={selectedId === item.uuid}
+                        className="object-row-button"
+                        title={`${item.name}\n${item.uuid}`}
+                        onClick={() => onSelect(item)}
                       >
-                        {objectMeta(group.type).abbreviation}
-                      </span>
-                      <span className="object-label">{item.name}</span>
-                    </button>
+                        <span
+                          className="object-icon"
+                          aria-hidden="true"
+                          style={{ background: objectMeta(group.type).color }}
+                        >
+                          {objectMeta(group.type).abbreviation}
+                        </span>
+                        <span className="object-label">{item.name}</span>
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}

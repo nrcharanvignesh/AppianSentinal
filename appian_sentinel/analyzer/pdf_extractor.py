@@ -84,7 +84,7 @@ async def extract_user_story_from_text(
     raw_text: str,
     *,
     source_id: str = "chat",
-    source_kind: Literal["chat", "pdf", "ado"] = "chat",
+    source_kind: Literal["chat", "pdf", "files", "ado"] = "chat",
 ) -> UserStory:
     """Extract a structured :class:`UserStory` from raw text (not a PDF)."""
     if not raw_text.strip():
@@ -167,7 +167,7 @@ async def extract_user_story(pdf_path: Path) -> UserStory:
 def _set_source(
     story: UserStory,
     source_id: str,
-    source_kind: Literal["chat", "pdf", "ado"],
+    source_kind: Literal["chat", "pdf", "files", "ado"],
 ) -> None:
     """Apply source metadata to a story and all of its criteria."""
     story.source_id = source_id

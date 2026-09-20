@@ -6,21 +6,21 @@ import { buildNavigation } from '../lib/sail-symbols';
 import AssistantPanel from './AssistantPanel';
 import BottomPanel from './BottomPanel';
 import EditorWorkspace from './EditorWorkspace';
-import NavigationPane from './NavigationPane';
 import ObjectExplorer from './ObjectExplorer';
+import SettingsDialog from './SettingsDialog';
 import TopAppBar from './TopAppBar';
+import TypedCrudDialog from './TypedCrudDialog';
 
 const TESTABLE_TYPES = new Set(['interface', 'expression_rule']);
-const AVAILABLE_DESIGNER_VIEWS = ['build'];
 const EMPTY_SETTINGS = {
   base_url: '', api_key: '', protocol: 'auto', primary_model: '', fast_model: '',
   ado_org: '', ado_project: '', ado_pat: '',
 };
 const PANEL_STORAGE_KEY = 'appian-sentinel-panel-sizes';
-const PANEL_DEFAULTS = { explorer: 250, assistant: 310, results: 174 };
+const PANEL_DEFAULTS = { explorer: 240, editor: 520, results: 174 };
 const PANEL_LIMITS = {
   explorer: [180, 420],
-  assistant: [220, 480],
+  editor: [480, 640],
   results: [110, 360],
 };
 
@@ -96,6 +96,9 @@ export default function Workbench() {
   const [history, setHistory] = useState([]);
   const [messages, setMessages] = useState([]);
   const [progress, setProgress] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [typedCrudOpen, setTypedCrudOpen] = useState(false);
+  const [chatSelected, setChatSelected] = useState([]);
   const [settings, setSettings] = useState(EMPTY_SETTINGS);
   const [settingsState, setSettingsState] = useState('');
   const [panelSizes, setPanelSizes] = useState(PANEL_DEFAULTS);
@@ -108,7 +111,7 @@ export default function Workbench() {
       const saved = JSON.parse(window.localStorage.getItem(PANEL_STORAGE_KEY) || '{}');
       setPanelSizes({
         explorer: clampPanel('explorer', saved.explorer ?? PANEL_DEFAULTS.explorer),
-        assistant: clampPanel('assistant', saved.assistant ?? PANEL_DEFAULTS.assistant),
+        editor: clampPanel('editor', saved.editor ?? saved.assistant ?? PANEL_DEFAULTS.editor),
         results: clampPanel('results', saved.results ?? PANEL_DEFAULTS.results),
       });
     } catch {
@@ -128,8 +131,8 @@ export default function Workbench() {
       const [minimum, configuredMaximum] = PANEL_LIMITS[name];
       let maximum = configuredMaximum;
       if (name === 'explorer') {
-        maximum = Math.min(maximum, window.innerWidth - current.assistant - 328);
-      } else if (name === 'assistant') {
+        maximum = Math.min(maximum, window.innerWidth - current.editor - 328);
+      } else if (name === 'editor') {
         maximum = Math.min(maximum, window.innerWidth - current.explorer - 328);
       } else {
         maximum = Math.min(maximum, window.innerHeight - 256);
@@ -213,7 +216,7 @@ export default function Workbench() {
     loadCodebase();
     api.settings()
       .then((value) => { if (active) setSettings({ ...EMPTY_SETTINGS, ...value }); })
-      .catch(() => setSettingsState('Could not read settings from the sidecar.'));
+      .catch(() => setSettingsState('Could not read settings.'));
     refresh();
     connect();
     interval = window.setInterval(refresh, 3000);
@@ -337,8 +340,22 @@ export default function Workbench() {
   function sendMessage(content) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    socket.send(JSON.stringify({ type: 'chat', content }));
-    setMessages((items) => [...items, { id: `local-${Date.now()}`, role: 'user', content }]);
+    const objectUuids = chatSelected.map((item) => item.uuid);
+    socket.send(JSON.stringify({ type: 'chat', content, object_uuids: objectUuids }));
+    setMessages((items) => [...items, {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content,
+      metadata: { object_uuids: objectUuids },
+    }]);
+  }
+
+  function toggleChatObject(item) {
+    setChatSelected((current) => (
+      current.some((entry) => entry.uuid === item.uuid)
+        ? current.filter((entry) => entry.uuid !== item.uuid)
+        : [...current, item]
+    ));
   }
 
   async function saveSettings(form) {
@@ -402,21 +419,14 @@ export default function Workbench() {
         connected={connected}
         status={status.status}
         onUpload={upload}
+        onOpenObjectOperations={() => setTypedCrudOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
-      <div className="designer-shell-body">
-        {/* Appian's application navigation. Only Build is enabled: the other
-            views have no implementation here, so they are shown disabled with
-            a reason rather than hidden or faked. */}
-        <NavigationPane
-          active="build"
-          available={AVAILABLE_DESIGNER_VIEWS}
-          onNavigate={() => {}}
-        />
       <div
         className="workbench-main"
         style={{
           '--explorer-width': `${panelSizes.explorer}px`,
-          '--assistant-width': `${panelSizes.assistant}px`,
+          '--editor-width': `${panelSizes.editor}px`,
         }}
       >
         <ObjectExplorer
@@ -424,7 +434,9 @@ export default function Workbench() {
           loading={codebaseState.loading}
           error={codebaseState.error}
           selectedId={activeId}
+          chatSelectedIds={chatSelected.map((item) => item.uuid)}
           onSelect={openObject}
+          onToggleChat={toggleChatObject}
         />
         <ResizeHandle
           orientation="vertical"
@@ -434,10 +446,26 @@ export default function Workbench() {
           maximum={PANEL_LIMITS.explorer[1]}
           onDelta={(delta) => resizePanel('explorer', delta)}
         />
-        <div
-          className="center-column"
-          style={{ '--results-height': `${panelSizes.results}px` }}
-        >
+        <AssistantPanel
+          messages={messages}
+          connected={connected}
+          progress={progress}
+          selectedObjects={chatSelected}
+          objectCatalog={objectCatalog}
+          onRemoveSelected={(uuid) => setChatSelected((items) => items.filter((item) => item.uuid !== uuid))}
+          onSend={sendMessage}
+          onFetchAdo={api.ado}
+          onUploadFiles={api.uploadRequirementFiles}
+        />
+        <ResizeHandle
+          orientation="vertical"
+          label="Resize assistant"
+          value={panelSizes.editor}
+          minimum={PANEL_LIMITS.editor[0]}
+          maximum={PANEL_LIMITS.editor[1]}
+          onDelta={(delta) => resizePanel('editor', -delta)}
+        />
+        <div className="center-column" style={{ '--results-height': `${panelSizes.results}px` }}>
           <EditorWorkspace
             tabs={tabs}
             activeId={activeId}
@@ -486,30 +514,34 @@ export default function Workbench() {
             onOpenObject={openObject}
           />
         </div>
-        <ResizeHandle
-          orientation="vertical"
-          label="Resize assistant"
-          value={panelSizes.assistant}
-          minimum={PANEL_LIMITS.assistant[0]}
-          maximum={PANEL_LIMITS.assistant[1]}
-          onDelta={(delta) => resizePanel('assistant', -delta)}
-        />
-        <AssistantPanel
-          messages={messages}
-          currentStep={status.current_step || 0}
-          connected={connected}
-          progress={progress}
-          settings={settings}
-          settingsState={settingsState}
-          onSend={sendMessage}
-          onFetchAdo={api.ado}
-          onUploadStory={api.uploadStory}
-          onSaveSettings={saveSettings}
-          onTestSettings={testSettings}
-          onListModels={api.listModels}
-        />
       </div>
-      </div>
+      <SettingsDialog
+        open={settingsOpen}
+        settings={settings}
+        settingsState={settingsState}
+        onClose={() => setSettingsOpen(false)}
+        onSaveSettings={saveSettings}
+        onTestSettings={testSettings}
+        onListModels={api.listModels}
+      />
+      <TypedCrudDialog
+        open={typedCrudOpen}
+        objectTypes={Object.keys(codebase?.by_type || {}).sort()}
+        selectedObject={activeId ? {
+          uuid: activeId,
+          name: tabs.find((item) => item.uuid === activeId)?.name || object?.name || '',
+          type: object?.object_type || tabs.find((item) => item.uuid === activeId)?.type || '',
+        } : null}
+        onClose={() => setTypedCrudOpen(false)}
+        onChanged={async (operation) => {
+          await loadCodebase();
+          if (operation === 'delete') {
+            closeTab(activeId);
+          } else if (activeId) {
+            await loadObject(activeId);
+          }
+        }}
+      />
       <footer className="statusbar">
         <span>Appian {codebase?.appian_version || '--'}</span>
         <span>{activeId || 'No object selected'}</span>

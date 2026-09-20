@@ -15,6 +15,21 @@ from typing import Any
 from lxml import etree
 
 from appian_sentinel.generator import xml_writer
+from appian_sentinel.generator.native_ai_writers import build_native_ai_xml
+from appian_sentinel.generator.native_collaboration_writers import (
+    build_native_collaboration_artifact,
+)
+from appian_sentinel.generator.native_content_writers import build_native_content_xml
+from appian_sentinel.generator.native_data_writers import build_native_data_artifact
+from appian_sentinel.generator.native_experience_writers import (
+    build_native_experience_xml,
+)
+from appian_sentinel.generator.native_process_writers import build_native_process_xml
+from appian_sentinel.models.appian_objects import ObjectType
+from appian_sentinel.models.object_registry import (
+    CAPABILITY_BY_TYPE,
+    official_export_directories,
+)
 from appian_sentinel.parser.sail_diagnostics import analyze_sail
 
 logger = logging.getLogger(__name__)
@@ -23,16 +38,52 @@ logger = logging.getLogger(__name__)
 _CONTENT_TYPES = {"rule", "expression_rule", "interface", "constant", "decision"}
 _RECORD_TYPES = {"record_type", "recordtype"}
 _PROCESS_TYPES = {"process_model", "processmodel"}
-_OBJECT_DIRS = (
-    "content",
-    "processModel",
-    "recordType",
-    "datatype",
-    "webApi",
-    "connectedSystem",
-    "site",
-    "group",
-    "dataStore",
+_TYPE_ALIASES = {
+    "rule": ObjectType.EXPRESSION_RULE,
+    "recordtype": ObjectType.RECORD_TYPE,
+    "processmodel": ObjectType.PROCESS_MODEL,
+}
+_NATIVE_CONTENT_TYPES = frozenset(
+    {
+        ObjectType.EXPRESSION_RULE,
+        ObjectType.INTERFACE,
+        ObjectType.CONSTANT,
+        ObjectType.DECISION,
+        ObjectType.OUTBOUND_INTEGRATION,
+        ObjectType.WEB_API,
+        ObjectType.EVENT_CONSUMER,
+        ObjectType.CONNECTED_SYSTEM,
+    }
+)
+_NATIVE_DATA_TYPES = frozenset(
+    {ObjectType.DATA_TYPE, ObjectType.DATA_STORE, ObjectType.RECORD_TYPE}
+)
+_NATIVE_EXPERIENCE_TYPES = frozenset(
+    {ObjectType.SITE, ObjectType.PORTAL, ObjectType.REPORT, ObjectType.TEMPO_REPORT}
+)
+_NATIVE_PROCESS_TYPES = frozenset(
+    {ObjectType.PROCESS_MODEL, ObjectType.PROCESS_MODEL_FOLDER}
+)
+_NATIVE_COLLABORATION_TYPES = frozenset(
+    {
+        ObjectType.GROUP,
+        ObjectType.RULES_FOLDER,
+        ObjectType.DOCUMENT_FOLDER,
+        ObjectType.KNOWLEDGE_CENTER,
+        ObjectType.DOCUMENT,
+    }
+)
+_NATIVE_AI_TYPES = frozenset({ObjectType.TRANSLATION_SET})
+NATIVE_WRITABLE_TYPES = (
+    _NATIVE_CONTENT_TYPES
+    | _NATIVE_DATA_TYPES
+    | _NATIVE_EXPERIENCE_TYPES
+    | _NATIVE_PROCESS_TYPES
+    | _NATIVE_COLLABORATION_TYPES
+    | _NATIVE_AI_TYPES
+)
+_OBJECT_DIRS = tuple(
+    sorted(official_export_directories() - {"META-INF", "application"})
 )
 _LOG_LINE = re.compile(r'^\S+\s+\d+\s+(\S+)\s+"(.+)"$')
 
@@ -114,6 +165,89 @@ def _new_path(export_dir: Path, directory: str, obj: dict[str, Any]) -> Path:
     return export_dir / directory / f"{object_uuid}.xml"
 
 
+def build_native_object_artifacts(
+    object_type: ObjectType,
+    object_uuid: str,
+    name: str,
+    fields: dict[str, object],
+) -> tuple[Path, dict[Path, bytes]]:
+    """Build all files for one proven native object without changing the export."""
+    capability = CAPABILITY_BY_TYPE[object_type]
+    directory = Path(capability.export_dir)
+    payloads: dict[Path, bytes] = {}
+    if object_type in _NATIVE_CONTENT_TYPES:
+        artifact = build_native_content_xml(object_type, object_uuid, name, fields)
+        filename = f"{object_uuid}.xml"
+    elif object_type in _NATIVE_DATA_TYPES:
+        filename, artifact = build_native_data_artifact(
+            object_type, object_uuid, name, fields
+        )
+    elif object_type in _NATIVE_EXPERIENCE_TYPES:
+        artifact = build_native_experience_xml(object_type, object_uuid, name, fields)
+        filename = f"{object_uuid}.xml"
+    elif object_type in _NATIVE_PROCESS_TYPES:
+        artifact = build_native_process_xml(object_type, object_uuid, name, fields)
+        filename = f"{object_uuid}.xml"
+    elif object_type in _NATIVE_COLLABORATION_TYPES:
+        artifact, native_payloads = build_native_collaboration_artifact(
+            object_type, object_uuid, name, fields
+        )
+        payloads = {
+            directory / relative_path: content
+            for relative_path, content in native_payloads.items()
+        }
+        filename = f"{object_uuid}.xml"
+    elif object_type in _NATIVE_AI_TYPES:
+        artifact = build_native_ai_xml(object_type, object_uuid, name, fields)
+        filename = f"{object_uuid}.xml"
+    else:
+        raise ValueError(
+            f"No proven native writer for {object_type.value}; "
+            "a real export template is required"
+        )
+    primary = directory / filename
+    return primary, {primary: artifact, **payloads}
+
+
+def _object_type(value: str) -> ObjectType | None:
+    if value in _TYPE_ALIASES:
+        return _TYPE_ALIASES[value]
+    try:
+        return ObjectType(value)
+    except ValueError:
+        return None
+
+
+def _reject_invalid_sail(
+    obj: dict[str, Any],
+    *,
+    name: str,
+    obj_type: str,
+    action: str,
+    target: Path,
+) -> None:
+    """Validate SAIL before any bytes are written, for native and legacy paths."""
+    definition = obj.get("sail_code", obj.get("definition"))
+    if not isinstance(definition, str):
+        return
+    declared_inputs = [
+        str(item["name"])
+        for item in obj.get("rule_inputs", [])
+        if isinstance(item, dict) and "name" in item
+    ]
+    analysis = analyze_sail(definition, declared_inputs=declared_inputs or None)
+    if analysis.is_valid:
+        return
+    codes = ", ".join(item.code for item in analysis.errors)
+    raise ObjectWriteError(
+        object_name=name,
+        object_type=obj_type,
+        action=action,
+        target_path=target,
+        reason=f"SAIL validation failed: {codes}",
+    )
+
+
 def write_object(export_dir: Path, obj: dict[str, Any]) -> Path | None:
     """Write a generated / modified object into *export_dir*.
 
@@ -131,7 +265,37 @@ def write_object(export_dir: Path, obj: dict[str, Any]) -> Path | None:
     out = export_dir
 
     try:
-        if obj_type in _CONTENT_TYPES:
+        native_type = _object_type(obj_type)
+        use_native_create = (
+            action == "create"
+            and native_type in NATIVE_WRITABLE_TYPES
+            and not (
+                native_type is ObjectType.PROCESS_MODEL
+                and not obj.get("folder_uuid")
+            )
+        )
+        if use_native_create:
+            _reject_invalid_sail(obj, name=name, obj_type=obj_type, action=action, target=out)
+            fields = {
+                key: value
+                for key, value in obj.items()
+                if key not in {"type", "uuid", "name", "action", "file_path"}
+            }
+            relative_primary, artifacts = build_native_object_artifacts(
+                native_type,
+                str(obj.get("uuid", "")),
+                name,
+                fields,
+            )
+            out = export_dir / relative_primary
+            for relative_path, content in artifacts.items():
+                target = export_dir / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.suffix.lower() in {".xml", ".xsd"}:
+                    xml_writer._atomic_write_xml(target, content)
+                else:
+                    target.write_bytes(content)
+        elif obj_type in _CONTENT_TYPES:
             out = _resolve_existing(export_dir, obj) if action == "modify" else _new_path(export_dir, "content", obj)
             out.parent.mkdir(parents=True, exist_ok=True)
             definition = obj.get("sail_code", obj.get("definition"))

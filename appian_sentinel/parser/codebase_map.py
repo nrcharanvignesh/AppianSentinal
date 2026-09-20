@@ -22,6 +22,7 @@ from appian_sentinel.models.appian_objects import (
     ObjectType,
 )
 from appian_sentinel.models.codebase import CodebaseMap, PluginInfo
+from appian_sentinel.models.object_registry import official_export_directories
 from appian_sentinel.parser.xml_parser import parse_appian_xml
 
 logger = logging.getLogger(__name__)
@@ -184,21 +185,10 @@ def parse_application_xml(app_xml_path: Path) -> dict[str, str]:
 
 ProgressCallback = Callable[[str, int, int, str], None] | None
 
+
 OBJECT_SCAN_PATTERNS: dict[str, str] = {
-    "content": "*.xml",
-    "processModel": "*.xml",
-    "processModelFolder": "*.xml",
-    "recordType": "*.xml",
-    "datatype": "*.xsd",
-    "webApi": "*.xml",
-    "connectedSystem": "*.xml",
-    "site": "*.xml",
-    "portal": "*.xml",
-    "group": "*.xml",
-    "dataStore": "*.xml",
-    "tempoReport": "*.xml",
-    "translationSet": "*.xml",
-    "translationString": "*.xml",
+    directory: "*.xsd" if directory == "datatype" else "*.xml"
+    for directory in sorted(official_export_directories() - {"META-INF", "application"})
 }
 
 

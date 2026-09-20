@@ -1,89 +1,119 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-const STEPS = [
-  'Requirement Analysis', 'Codebase Analysis', 'Design', 'Implementation',
-  'Dependency Check', 'Performance Check', 'Code Quality', 'Test Generation',
-  'Final Packaging',
-];
+import { typedCrudApi } from '../lib/typed-crud-api';
 
-const MODES = ['Chat', 'ADO', 'Settings', 'Progress'];
-
-// A dropdown when the gateway list is available, a text box when it is not.
-// A configured model that the gateway no longer lists still has to be visible,
-// so it is added to the options rather than silently dropped.
-function ModelField({ label, value, models, onChange }) {
-  if (!models.length) {
-    return (
-      <label>
-        {label}
-        <input value={value} onChange={onChange} placeholder="bedrock.anthropic.claude-sonnet-5" />
-      </label>
-    );
+function toolCalls(message) {
+  const meta = message.metadata || {};
+  if (Array.isArray(meta.tool_calls)) return meta.tool_calls;
+  if (message.message_type === 'tool' && meta.tool) {
+    return [{
+      tool: meta.tool,
+      status: meta.status || 'ok',
+      object_uuids: Array.isArray(meta.object_uuids) ? meta.object_uuids : [],
+    }];
   }
-  const options = models.includes(value) || !value ? models : [value, ...models];
+  return [];
+}
+
+function involvedObjects(message, objectCatalog) {
+  const meta = message.metadata || {};
+  if (Array.isArray(meta.objects) && meta.objects.length) return meta.objects;
+  if (Array.isArray(meta.object_uuids)) {
+    return meta.object_uuids.map((uuid) => objectCatalog[uuid] || { uuid, name: uuid });
+  }
+  return [];
+}
+
+function pendingDeletion(message) {
+  const result = message.metadata?.result?.result;
+  return result?.pending_deletion === true ? result : null;
+}
+
+function PendingDeletionCard({ payload, objectCatalog }) {
+  const [force, setForce] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState('');
+  const object = payload.object || {};
+  const dependencies = payload.reverse_dependencies || [];
+  const confirmation = payload.confirmation || {};
+  const forceRequired = confirmation.force_required === true && dependencies.length > 0;
+
+  if (outcome) {
+    return <div className="pending-delete-outcome" role="status">{outcome}</div>;
+  }
+
+  async function applyDelete() {
+    setBusy(true);
+    try {
+      const result = await typedCrudApi.remove(
+        confirmation.slug,
+        confirmation.object_uuid,
+        { preview: false, force: forceRequired ? force : false },
+      );
+      setOutcome(result?.status === 'deleted'
+        ? `${object.name || object.uuid} was deleted.`
+        : `Delete completed with status: ${result?.status || 'unknown'}.`);
+    } catch (error) {
+      setOutcome(`Delete failed: ${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <label>
-      {label}
-      <select value={value} onChange={onChange}>
-        {!value && <option value="">Select a model</option>}
-        {options.map((model) => (
-          <option key={model} value={model}>
-            {models.includes(model) ? model : `${model} (not listed by gateway)`}
-          </option>
-        ))}
-      </select>
-    </label>
+    <section className="pending-delete-card" aria-label={`Confirm deletion of ${object.name || object.uuid}`}>
+      <strong>Delete {object.name || object.uuid}?</strong>
+      <p>
+        {String(object.type || 'object').replaceAll('_', ' ')}. Nothing has been deleted yet.
+        Deleting cannot be undone.
+      </p>
+      {dependencies.length > 0 && (
+        <div className="pending-delete-dependencies">
+          <strong>Objects that depend on this object:</strong>
+          <ul>
+            {dependencies.map((uuid) => (
+              <li key={uuid}>{objectCatalog[uuid]?.name || uuid}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {forceRequired && (
+        <label className="pending-delete-force">
+          <input type="checkbox" checked={force} onChange={(event) => setForce(event.target.checked)} />
+          Force deletion. Dependent objects will break.
+        </label>
+      )}
+      <div className="pending-delete-actions">
+        <button type="button" className="secondary-button" disabled={busy} onClick={() => setOutcome('Deletion cancelled. Nothing was deleted.')}>Cancel</button>
+        <button type="button" className="danger-button" disabled={busy || (forceRequired && !force)} onClick={applyDelete}>
+          {busy ? 'Deleting...' : 'Delete object'}
+        </button>
+      </div>
+    </section>
   );
 }
 
 export default function AssistantPanel({
   messages,
-  currentStep,
   connected,
   progress,
-  settings,
-  settingsState,
+  selectedObjects,
+  objectCatalog = {},
+  onRemoveSelected,
   onSend,
   onFetchAdo,
-  onUploadStory,
-  onSaveSettings,
-  onTestSettings,
-  onListModels,
+  onUploadFiles,
 }) {
   const [draft, setDraft] = useState('');
-  const [mode, setMode] = useState('Chat');
   const [adoId, setAdoId] = useState('');
   const [adoState, setAdoState] = useState('');
-  const [form, setForm] = useState(settings);
-  const [models, setModels] = useState([]);
-  const [modelsState, setModelsState] = useState('');
   const endRef = useRef(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'nearest' });
   }, [messages]);
-
-  useEffect(() => setForm(settings), [settings]);
-
-  const loadModels = useCallback(async () => {
-    if (!onListModels) return;
-    setModelsState('Loading models...');
-    try {
-      const result = await onListModels();
-      setModels(result.models || []);
-      setModelsState(result.models?.length ? '' : 'The gateway returned no models.');
-    } catch (error) {
-      // Keep the fields editable: a picker that cannot load must not block work.
-      setModels([]);
-      setModelsState(`Model list unavailable: ${error.message}`);
-    }
-  }, [onListModels]);
-
-  useEffect(() => {
-    if (mode === 'Settings') loadModels();
-  }, [mode, loadModels]);
 
   function submit() {
     const value = draft.trim();
@@ -99,165 +129,162 @@ export default function AssistantPanel({
       await onFetchAdo(adoId.trim());
       setAdoState(`Work item ${adoId.trim()} loaded.`);
     } catch (error) {
-      setAdoState(`ADO error: ${error.message}`);
+      setAdoState(`Azure DevOps error: ${error.message}`);
     }
   }
 
-  async function uploadStory(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setAdoState(`Loading ${file.name}...`);
+  async function uploadFiles(event) {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    setAdoState(`Loading ${files.length} requirement file${files.length === 1 ? '' : 's'}...`);
     try {
-      await onUploadStory(file);
-      setAdoState(`PDF ${file.name} loaded.`);
+      const result = await onUploadFiles(files);
+      setAdoState(`${result.files?.length || files.length} requirement file${files.length === 1 ? '' : 's'} loaded.`);
     } catch (error) {
-      setAdoState(`PDF error: ${error.message}`);
+      setAdoState(`Attachment error: ${error.message}`);
     } finally {
       event.target.value = '';
     }
   }
 
-  const setField = (name) => (event) => setForm((value) => ({ ...value, [name]: event.target.value }));
-
   return (
-    <aside className="assistant-panel pane" aria-label="Assistant and workflow">
-      <div className="assistant-tabs" role="tablist">
-        {MODES.map((item) => (
-          <button type="button" role="tab" aria-selected={mode === item} onClick={() => setMode(item)} key={item}>{item}</button>
-        ))}
+    <section className="assistant-panel pane" aria-label="Sentinel chat">
+      <div className="assistant-heading">
+        <div className="assistant-avatar" aria-hidden="true">S</div>
+        <div>
+          <strong>Sentinel Assistant</strong>
+          <span className={connected ? 'is-online' : 'is-offline'}>
+            {connected ? 'Ready' : 'Offline'}
+          </span>
+        </div>
       </div>
-      {mode === 'Chat' && (
-        <>
-          <div className="assistant-heading">
-            <div className="assistant-avatar" aria-hidden="true">S</div>
+      <div className="messages" aria-live="polite">
+        {progress && (
+          <div className="live-progress" role="status">
             <div>
-              <strong>Sentinel Assistant</strong>
-              <span className={connected ? 'is-online' : 'is-offline'}>
-                {connected ? 'Ready' : 'Offline'}
-              </span>
+              <strong>{String(progress.phase || 'Working').replaceAll('_', ' ')}</strong>
+              <span>{progress.percent}%</span>
             </div>
+            <progress max="100" value={progress.percent} />
+            <p>{progress.detail}</p>
           </div>
-          <div className="messages" aria-live="polite">
-            {messages.length === 0 && (
-              <div className="assistant-empty">
-                <strong>Build with application context</strong>
-                <p>Ask about the open object, requirements, tests, or dependency impact.</p>
-              </div>
-            )}
-            {messages.map((message, index) => (
-              <div className={`chat-message is-${message.role || 'assistant'}`} key={message.id || index}>
-                <span>{message.role === 'user' ? 'You' : 'Sentinel'}</span>
-                <p>{message.content}</p>
-              </div>
-            ))}
-            <div ref={endRef} />
+        )}
+        {messages.length === 0 && (
+          <div className="assistant-empty">
+            <strong>Build with application context</strong>
+            <p>Select objects on the left, then ask about requirements, tests, or impact.</p>
           </div>
-          <div className="composer">
-            <textarea
-              rows="3"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder={connected ? 'Ask Sentinel...' : 'Sidecar connection required'}
-              disabled={!connected}
-            />
-            <div><span>Enter to send</span><button type="button" onClick={submit} disabled={!connected || !draft.trim()}>Send</button></div>
-          </div>
-        </>
-      )}
-      {mode === 'ADO' && (
-        <div className="assistant-form">
-          <h3>Azure DevOps work item</h3>
-          <label>Work item ID<input value={adoId} onChange={(event) => setAdoId(event.target.value)} placeholder="1536949" /></label>
-          <button className="primary-button" type="button" disabled={!adoId.trim()} onClick={fetchAdo}>Load work item</button>
-          <label>
-            User story PDF
-            <input type="file" accept="application/pdf,.pdf" onChange={uploadStory} />
-          </label>
-          {adoState && <p className="form-state" aria-live="polite">{adoState}</p>}
-        </div>
-      )}
-      {mode === 'Settings' && (
-        <div className="assistant-form settings-form">
-          <h3>Connections</h3>
-          <label>LiteLLM base URL<input value={form.base_url || ''} onChange={setField('base_url')} /></label>
-          <label>API key<input type="password" value={form.api_key || ''} onChange={setField('api_key')} /></label>
-          <label>Protocol
-            <select value={form.protocol || 'auto'} onChange={setField('protocol')}>
-              <option value="auto">Auto</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
-            </select>
-          </label>
-          <ModelField
-            label="Primary model"
-            value={form.primary_model || ''}
-            models={models}
-            onChange={setField('primary_model')}
-          />
-          <ModelField
-            label="Fast model"
-            value={form.fast_model || ''}
-            models={models}
-            onChange={setField('fast_model')}
-          />
-          {modelsState && (
-            <p className="form-state" aria-live="polite">
-              {modelsState}{' '}
-              <button type="button" className="link-button" onClick={loadModels}>Retry</button>
-            </p>
-          )}
-          <label>ADO organization<input value={form.ado_org || ''} onChange={setField('ado_org')} /></label>
-          <label>ADO project<input value={form.ado_project || ''} onChange={setField('ado_project')} /></label>
-          <label>ADO PAT<input type="password" value={form.ado_pat || ''} onChange={setField('ado_pat')} /></label>
-          <div className="form-actions">
-            {/* Deliberately not gated on the socket: testing and saving the
-                connection are how an operator recovers from being offline. */}
+        )}
+        {messages.map((message, index) => {
+          const objects = involvedObjects(message, objectCatalog);
+          const calls = toolCalls(message);
+          const deletion = pendingDeletion(message);
+          const isTool = message.message_type === 'tool' || calls.length > 0 || objects.length > 0;
+          return (
+            <div className={`chat-message is-${message.role || 'assistant'}`} key={message.id || index}>
+              <span>{message.role === 'user' ? 'You' : isTool ? 'Activity' : 'Sentinel'}</span>
+              {objects.length > 0 && (
+                <ul className="object-chip-list" aria-label="Objects in this turn">
+                  {objects.map((item) => (
+                    <li className="object-chip" key={item.uuid || item.name}>
+                      <strong>{item.name || item.uuid}</strong>
+                      <span>{String(item.type || '').replaceAll('_', ' ')}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {calls.length > 0 && (
+                <ol className="tool-call-list" aria-label="Tool calls">
+                  {calls.map((call, callIndex) => (
+                    <li key={`${call.tool}-${call.object_uuid || callIndex}`}>
+                      <code>{call.tool}</code>
+                      <span>
+                        {call.object_name || call.object_uuid || (call.object_uuids || [])
+                          .map((uuid) => objectCatalog[uuid]?.name || uuid)
+                          .join(', ')}
+                      </span>
+                      <span className={`tool-status is-${call.status || 'ok'}`}>{call.status || 'ok'}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {deletion
+                ? <PendingDeletionCard payload={deletion} objectCatalog={objectCatalog} />
+                : <p>{message.content}</p>}
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
+      {selectedObjects.length > 0 && (
+        <div className="chat-selected-objects" aria-label="Selected chat objects">
+          {selectedObjects.map((item) => (
             <button
               type="button"
-              className="secondary-button"
-              title="Save these settings and test the provider connection"
-              onClick={() => onTestSettings(form)}
+              className="object-chip is-removable"
+              key={item.uuid}
+              onClick={() => onRemoveSelected(item.uuid)}
+              title="Remove from chat context"
             >
-              Test
+              {item.name}
             </button>
-            <button
-              type="button"
-              className="primary-button"
-              title="Save provider settings"
-              onClick={() => onSaveSettings(form)}
-            >
-              Save
-            </button>
-          </div>
-          {settingsState && <p className="form-state" aria-live="polite">{settingsState}</p>}
+          ))}
         </div>
       )}
-      {mode === 'Progress' && (
-        <div className="progress-pane">
-          {progress && (
-            <div className="live-progress">
-              <div><strong>{String(progress.phase || 'Working').replaceAll('_', ' ')}</strong><span>{progress.percent}%</span></div>
-              <progress max="100" value={progress.percent} />
-              <p>{progress.detail}</p>
-            </div>
-          )}
-          <ol className="workflow-list">
-            {STEPS.map((label, index) => {
-              const step = index + 1;
-              return (
-                <li className={step === currentStep ? 'is-current' : step < currentStep ? 'is-complete' : ''} key={label}>
-                  <span>{step < currentStep ? 'OK' : step}</span>
-                  <div><strong>{label}</strong><small>{step === currentStep ? 'In progress' : step < currentStep ? 'Complete' : 'Waiting'}</small></div>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      )}
-    </aside>
+      <div className="chat-context-bar" aria-label="Add requirement context">
+        <label className="ado-chat-field">
+          <span>Azure DevOps work item</span>
+          <input
+            value={adoId}
+            onChange={(event) => setAdoId(event.target.value)}
+            placeholder="1536949"
+            inputMode="numeric"
+          />
+        </label>
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={!adoId.trim()}
+          onClick={fetchAdo}
+          title="Load an Azure DevOps work item"
+        >
+          Load work item
+        </button>
+        <label className="attachment-button">
+          Attach files (PDF, TXT, MD; up to 10)
+          <input
+            type="file"
+            accept="application/pdf,.pdf,text/plain,.txt,text/markdown,.md"
+            multiple
+            onChange={uploadFiles}
+          />
+        </label>
+        {adoState && (
+          <p
+            className={`chat-context-state ${adoState.includes('error:') ? 'is-error' : ''}`}
+            role={adoState.includes('error:') ? 'alert' : 'status'}
+          >
+            {adoState}
+          </p>
+        )}
+      </div>
+      <div className="composer">
+        <textarea
+          aria-label="Message Sentinel"
+          rows="3"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          placeholder={connected ? 'Ask Sentinel...' : 'Connection required'}
+          disabled={!connected}
+        />
+        <div><span>Enter to send</span><button type="button" onClick={submit} disabled={!connected || !draft.trim()}>Send</button></div>
+      </div>
+    </section>
   );
 }

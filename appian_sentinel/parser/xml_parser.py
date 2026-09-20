@@ -12,18 +12,28 @@ from pathlib import Path
 from lxml import etree
 
 from appian_sentinel.models.appian_objects import (
+    AIAgent,
+    AISkill,
     AppianObject,
+    BusinessProcess,
     ConnectedSystem,
     Constant,
+    ControlPanel,
+    ControlPanelHierarchyItem,
+    Dashboard,
     DataStore,
     DataStoreEntity,
     DataType,
     Decision,
     Document,
+    EventConsumer,
     ExpressionRule,
+    Feed,
     Folder,
     Group,
+    GroupType,
     Interface,
+    KnowledgeCenter,
     ObjectType,
     OutboundIntegration,
     OutputMetadata,
@@ -32,11 +42,15 @@ from appian_sentinel.models.appian_objects import (
     ProcessModel,
     ProcessModelFolder,
     ProcessNode,
+    ProcessReport,
     ProcessVariable,
     RecordAction,
     RecordField,
     RecordRelationship,
     RecordType,
+    Report,
+    RoboticTask,
+    RobotPool,
     RuleInput,
     RulesFolder,
     SecurityRole,
@@ -49,6 +63,7 @@ from appian_sentinel.models.appian_objects import (
     WebApi,
     extract_uuid_references,
 )
+from appian_sentinel.models.object_registry import EXPORT_DIR_TO_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -285,8 +300,8 @@ def parse_content_xml(xml_path: Path) -> AppianObject | None:
         "folder": _parse_folder,
         "rulesFolder": _parse_rules_folder,
         "outboundIntegration": _parse_outbound_integration,
-        "communityKnowledgeCenter": _parse_folder_generic,
-        "report": _parse_generic_content,
+        "communityKnowledgeCenter": _parse_knowledge_center,
+        "report": _parse_report,
     }
 
     for tag, parser_fn in discriminator_map.items():
@@ -428,12 +443,31 @@ def _parse_folder(folder_el: etree._Element, root: etree._Element) -> Folder:
 
 
 def _parse_folder_generic(el: etree._Element, root: etree._Element) -> Folder:
-    """Parse any folder-like element (communityKnowledgeCenter, etc.) into a Folder."""
+    """Parse any folder-like element into a Folder."""
     return Folder(
         uuid=_text(_find(el, "uuid")),
         name=_text(_find(el, "name")),
         description=_text(_find(el, "description")),
         parent_uuid=_text(_find(el, "parentUuid")),
+    )
+
+
+def _parse_knowledge_center(el: etree._Element, root: etree._Element) -> KnowledgeCenter:
+    return KnowledgeCenter(
+        uuid=_text(_find(el, "uuid")),
+        name=_text(_find(el, "name")),
+        description=_text(_find(el, "description")),
+        parent_uuid=_text(_find(el, "parentUuid")),
+    )
+
+
+def _parse_report(el: etree._Element, root: etree._Element) -> Report:
+    return Report(
+        uuid=_text(_find(el, "uuid")),
+        name=_text(_find(el, "name")),
+        description=_text(_find(el, "description")),
+        parent_uuid=_text(_find(el, "parentUuid")),
+        raw_xml=etree.tostring(el, encoding="unicode", with_tail=False),
     )
 
 
@@ -1349,6 +1383,48 @@ def parse_portal_xml(xml_path: Path) -> Portal | None:
 _DIR_PARSER_MAP: dict[str, type] = {}  # populated at module level below
 
 
+_PRESERVED_MODELS: dict[ObjectType, type] = {
+    ObjectType.BUSINESS_PROCESS: BusinessProcess,
+    ObjectType.PROCESS_REPORT: ProcessReport,
+    ObjectType.ROBOTIC_TASK: RoboticTask,
+    ObjectType.ROBOT_POOL: RobotPool,
+    ObjectType.CONTROL_PANEL: ControlPanel,
+    ObjectType.CONTROL_PANEL_HIERARCHY_ITEM: ControlPanelHierarchyItem,
+    ObjectType.DASHBOARD: Dashboard,
+    ObjectType.REPORT: Report,
+    ObjectType.AI_AGENT: AIAgent,
+    ObjectType.AI_SKILL: AISkill,
+    ObjectType.EVENT_CONSUMER: EventConsumer,
+    ObjectType.GROUP_TYPE: GroupType,
+    ObjectType.FEED: Feed,
+}
+
+
+def parse_preserved_directory_xml(xml_path: Path) -> AppianObject | None:
+    """Parse an official type whose schema is preserved as raw XML."""
+    object_type = EXPORT_DIR_TO_TYPE.get(xml_path.parent.name)
+    if object_type is None:
+        logger.debug("No parser for directory '%s' — skipping %s", xml_path.parent.name, xml_path.name)
+        return None
+    root = _parse_xml_file(xml_path)
+    if root is None:
+        return None
+    model = _PRESERVED_MODELS.get(object_type)
+    if model is None:
+        return None
+    uuid = _text(_find(root, "uuid")) or _attribute(root, "uuid")
+    if not uuid:
+        uuid_nodes = root.xpath(".//*[local-name()='uuid'][1]/text()")
+        uuid = str(uuid_nodes[0]).strip() if uuid_nodes else xml_path.stem
+    name_nodes = root.xpath(".//*[local-name()='name'][1]/text()")
+    return model(
+        uuid=uuid,
+        name=str(name_nodes[0]).strip() if name_nodes else xml_path.stem,
+        file_path=str(xml_path),
+        raw_xml=etree.tostring(root, encoding="unicode"),
+    )
+
+
 def parse_appian_xml(xml_path: Path) -> AppianObject | None:
     """Auto-detect the object type from the file's parent directory and parse it.
 
@@ -1375,8 +1451,7 @@ def parse_appian_xml(xml_path: Path) -> AppianObject | None:
 
     parser_fn = parser_map.get(parent_dir)
     if parser_fn is None:
-        logger.debug("No parser for directory '%s' — skipping %s", parent_dir, xml_path.name)
-        return None
+        return parse_preserved_directory_xml(xml_path)
 
     try:
         return parser_fn(xml_path)

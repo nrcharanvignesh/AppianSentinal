@@ -25,7 +25,10 @@ from appian_sentinel.mcp_server import cache
 from appian_sentinel.mcp_server.models import (
     ApplySailEditResponse,
     BulkAddTestsResponse,
+    BulkReplaceTestsRequest,
     CoverageResponse,
+    CreateTypedObjectRequest,
+    DeleteTypedObjectRequest,
     DependencyDirection,
     DependencyEdge,
     DependencyGraphRequest,
@@ -38,6 +41,10 @@ from appian_sentinel.mcp_server.models import (
     GenerateSolutionDesignResponse,
     GenerateTestSuiteRequest,
     GenerateTestSuiteResponse,
+    GetCodebaseRequest,
+    GetCodebaseResponse,
+    GetObjectTestsRequest,
+    GetObjectTestsResponse,
     HistoryChange,
     HistoryCommitResponse,
     HistoryDiffResponse,
@@ -48,14 +55,19 @@ from appian_sentinel.mcp_server.models import (
     InspectSailResponse,
     ListObjectsRequest,
     ListObjectsResponse,
+    MutationResponse,
     NormalizeRequirementRequest,
     NormalizeRequirementResponse,
     ObjectSummary,
     ResolveObjectRequest,
     ResolveObjectResponse,
+    RunObjectStaticTestRequest,
+    RunObjectStaticTestResponse,
     RunStaticTestsRequest,
     SailDiagnostic,
     StaticTestResult,
+    TypedObjectRequest,
+    UpdateTypedObjectRequest,
     ValidateObjectRequest,
     ValidateObjectResponse,
     ValidateSailRequest,
@@ -79,6 +91,14 @@ from appian_sentinel.parser.sail_ast import (
 )
 from appian_sentinel.parser.sail_diagnostics import analyze_sail
 from appian_sentinel.security import mask_secrets
+from appian_sentinel.services.export_mutations import (
+    MutationError,
+    create_typed_object,
+    delete_typed_object,
+    get_typed_object,
+    update_typed_object,
+)
+from appian_sentinel.services.object_tests import clone_test_nodes, extract_test_cases
 from appian_sentinel.services.workspace import WorkspaceHistoryService
 from appian_sentinel.tester.test_generator import TestGenerator
 from appian_sentinel.tester.test_runner import StaticTestRunner
@@ -322,6 +342,34 @@ def get_object(export_dir: str, uuid: str) -> dict[str, Any]:
     data["direct_dependencies"] = sorted(cb.get_direct_dependencies(uuid))
     data["direct_dependents"] = sorted(cb.get_direct_dependents(uuid))
     return _sanitize(data)
+
+
+def get_codebase(request: GetCodebaseRequest) -> GetCodebaseResponse:
+    """Return the bounded object-explorer summary for one parsed export."""
+    cb = cache.get_codebase(_sandbox_path(request.export_dir))
+    return GetCodebaseResponse(
+        app_name=cb.app_name,
+        app_uuid=cb.app_uuid,
+        app_prefix=cb.app_prefix,
+        appian_version=cb.appian_version,
+        export_timestamp=cb.export_timestamp,
+        by_type={key: list(value) for key, value in cb.by_type.items()},
+        uuid_to_name=dict(cb.uuid_to_name),
+        descriptions={
+            uuid: obj.description
+            for uuid, obj in cb.objects.items()
+            if obj.description.strip()
+        },
+        reverse_dependencies={
+            uuid: sorted(dependents)
+            for uuid, dependents in cb.reverse_dependencies.items()
+        },
+        parent_by_uuid={
+            uuid: obj.parent_uuid
+            for uuid, obj in cb.objects.items()
+            if obj.parent_uuid.strip()
+        },
+    )
 
 
 async def read_ado_work_item(
@@ -768,6 +816,50 @@ async def run_static_tests(request: RunStaticTestsRequest) -> StaticTestResult:
     )
 
 
+def get_object_tests(request: GetObjectTestsRequest) -> GetObjectTestsResponse:
+    """Return embedded Appian test cases for one rule or interface."""
+    cb = cache.get_codebase(_sandbox_path(request.export_dir))
+    obj = cb.get_object(request.object_uuid)
+    if obj is None:
+        raise ValueError("Object not found")
+    if not obj.file_path:
+        raise ValueError("Object does not have a source XML path")
+    tests = extract_test_cases(_sandbox_path(obj.file_path))
+    return GetObjectTestsResponse(object_uuid=obj.uuid, tests=tests)
+
+
+def run_object_static_test(
+    request: RunObjectStaticTestRequest,
+) -> RunObjectStaticTestResponse:
+    """Analyze one object's SAIL with supplied ad hoc input names."""
+    cb = cache.get_codebase(_sandbox_path(request.export_dir))
+    obj = cb.get_object(request.object_uuid)
+    if obj is None:
+        raise ValueError("Object not found")
+    source = getattr(obj, "definition", "")
+    if not isinstance(source, str) or not source:
+        raise ValueError("Object does not contain SAIL source")
+    declared_inputs = {
+        item.name for item in getattr(obj, "rule_inputs", [])
+    } | set(request.inputs)
+    analysis = analyze_sail(
+        source,
+        target_version=cb.appian_version or None,
+        known_uuids=set(cb.objects),
+        declared_inputs=sorted(declared_inputs),
+    )
+    return RunObjectStaticTestResponse(
+        object_uuid=obj.uuid,
+        is_valid=analysis.is_valid,
+        note=(
+            "Static analysis only. Appian Sentinel has no Appian engine, so "
+            "the rule was not evaluated and no output value was produced."
+        ),
+        inputs=request.inputs,
+        diagnostics=_analysis_diagnostics(analysis.diagnostics),
+    )
+
+
 def workspace_status(export_dir: str) -> WorkspaceStatusResponse:
     """Return history and working-tree status for one export."""
     service = WorkspaceHistoryService(_sandbox_path(export_dir))
@@ -998,6 +1090,66 @@ def bulk_add_tests(
     )
 
 
+def bulk_replace_tests(request: BulkReplaceTestsRequest) -> BulkAddTestsResponse:
+    """Preview or replace embedded tests from structured test-case fields."""
+    export_path = _sandbox_path(request.export_dir)
+    cb = cache.get_codebase(export_path)
+    objects: list[Any] = []
+    source_bytes: dict[Path, bytes] = {}
+    for uuid in dict.fromkeys(request.object_uuids):
+        obj = cb.get_object(uuid)
+        if obj is None:
+            raise ValueError(f"Object not found: {uuid}")
+        if obj.object_type.value not in {"interface", "expression_rule", "rule"}:
+            raise ValueError(f"Object does not support embedded tests: {uuid}")
+        path = _sandbox_path(obj.file_path)
+        if not path.is_relative_to(export_path):
+            raise ValueError("Object file must be inside export_dir")
+        objects.append(obj)
+        source_bytes[path] = path.read_bytes()
+
+    test_data = [test.model_dump(mode="python") for test in request.tests]
+    for obj in objects:
+        clone_test_nodes(_sandbox_path(obj.file_path), test_data)
+
+    file_paths = [_display_path(Path(obj.file_path)) for obj in objects]
+    if request.preview:
+        return BulkAddTestsResponse(
+            status="preview",
+            object_uuids=[obj.uuid for obj in objects],
+            test_count=len(request.tests),
+            file_paths=file_paths,
+        )
+
+    try:
+        for obj in objects:
+            path = _sandbox_path(obj.file_path)
+            test_nodes = clone_test_nodes(path, test_data)
+            output = write_object(
+                export_path,
+                {
+                    "type": obj.object_type.value,
+                    "name": obj.name,
+                    "uuid": obj.uuid,
+                    "action": "modify",
+                    "test_nodes": test_nodes,
+                },
+            )
+            if output is None:
+                raise RuntimeError(f"Tests could not be written: {obj.uuid}")
+    except Exception:
+        for path, payload in source_bytes.items():
+            path.write_bytes(payload)
+        raise
+    cache.get_codebase(export_path, rebuild=True)
+    return BulkAddTestsResponse(
+        status="updated",
+        object_uuids=[obj.uuid for obj in objects],
+        test_count=len(request.tests),
+        file_paths=file_paths,
+    )
+
+
 def generate_full_zip(request: GenerateFullZipRequest) -> GenerateFullZipResponse:
     """Package a source-pure full ZIP at a new isolated output path."""
     export_dir = _sandbox_path(request.export_dir)
@@ -1015,3 +1167,107 @@ def generate_full_zip(request: GenerateFullZipRequest) -> GenerateFullZipRespons
         is_valid=is_valid,
         issues=issues,
     )
+
+
+def _mutation_response(data: dict[str, Any]) -> MutationResponse:
+    file_path = data.get("file_path") or ""
+    payload = data.get("object")
+    return MutationResponse(
+        status=str(data.get("status", "ok")),
+        uuid=str(data.get("uuid", "")),
+        name=str(data.get("name", "")),
+        file_path=_display_path(file_path) if file_path else "",
+        reason=str(data.get("reason", "")),
+        template_uuid=str(data.get("template_uuid", "")),
+        dependents=list(data.get("dependents") or []),
+        children=list(data.get("children") or []),
+        forced=bool(data.get("forced", False)),
+        object=_sanitize(payload) if isinstance(payload, dict) else None,
+    )
+
+
+def _mutation_error_response(exc: MutationError) -> MutationResponse:
+    details = _sanitize(exc.details) if isinstance(exc.details, dict) else {}
+    return MutationResponse(
+        status="error",
+        uuid=str(details.get("object_uuid", "")),
+        reason=exc.reason,
+        dependents=list(details.get("dependents") or []),
+        children=list(details.get("children") or []),
+    )
+
+
+def get_typed(object_type: ObjectType, request: TypedObjectRequest) -> MutationResponse:
+    """Return one object of a declared Designer type."""
+    try:
+        payload = get_typed_object(
+            _sandbox_path(request.export_dir),
+            object_type,
+            request.object_uuid,
+        )
+    except MutationError as exc:
+        return _mutation_error_response(exc)
+    return _mutation_response(
+        {
+            "status": "ok",
+            "uuid": payload.get("uuid", ""),
+            "name": payload.get("name", ""),
+            "file_path": payload.get("file_path", ""),
+            "object": payload,
+        }
+    )
+
+
+def create_typed(
+    object_type: ObjectType,
+    request: CreateTypedObjectRequest,
+) -> MutationResponse:
+    """Create one object of a declared Designer type."""
+    try:
+        payload = create_typed_object(
+            _sandbox_path(request.export_dir),
+            object_type,
+            name=request.name,
+            template_uuid=request.template_uuid,
+            fields=request.fields,
+            preview=request.preview,
+        )
+    except MutationError as exc:
+        return _mutation_error_response(exc)
+    return _mutation_response(payload)
+
+
+def update_typed(
+    object_type: ObjectType,
+    request: UpdateTypedObjectRequest,
+) -> MutationResponse:
+    """Update one object of a declared Designer type."""
+    try:
+        payload = update_typed_object(
+            _sandbox_path(request.export_dir),
+            object_type,
+            request.object_uuid,
+            request.fields,
+            preview=request.preview,
+        )
+    except MutationError as exc:
+        return _mutation_error_response(exc)
+    return _mutation_response(payload)
+
+
+def delete_typed(
+    object_type: ObjectType,
+    request: DeleteTypedObjectRequest,
+) -> MutationResponse:
+    """Delete one object of a declared Designer type."""
+    try:
+        payload = delete_typed_object(
+            _sandbox_path(request.export_dir),
+            object_type,
+            request.object_uuid,
+            force=request.force,
+            preview=request.preview,
+        )
+    except MutationError as exc:
+        return _mutation_error_response(exc)
+    return _mutation_response(payload)

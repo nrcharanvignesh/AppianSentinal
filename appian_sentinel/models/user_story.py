@@ -19,7 +19,7 @@ class AcceptanceCriterion(BaseModel):
     when: str = Field(default="", description="When action/event")
     then: str = Field(default="", description="Then expected outcome")
     source_id: str = ""
-    source_kind: Literal["chat", "pdf", "ado"] = "chat"
+    source_kind: Literal["chat", "pdf", "files", "ado"] = "chat"
 
 
 class UserStory(BaseModel):
@@ -34,7 +34,7 @@ class UserStory(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     raw_text: str = Field(default="", description="Original unprocessed text from the source document")
     source_id: str = ""
-    source_kind: Literal["chat", "pdf", "ado"] = "chat"
+    source_kind: Literal["chat", "pdf", "files", "ado"] = "chat"
 
 
 # ---------------------------------------------------------------------------

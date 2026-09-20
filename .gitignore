@@ -30,6 +30,11 @@ installers/AppianSentinel-Standalone-Install.cmd
 desktop/test-results/**/.last-run.json
 desktop/test-results/**/trace.zip
 desktop/test-results/**/video.webm
+desktop/test-results/**/error-context.md
+
+# Scratch probes kept out of the history.
+/_check_openai_tools.py
+tools/_*.py
 
 *.log
 .env

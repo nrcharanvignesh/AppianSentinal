@@ -10,11 +10,12 @@ import zipfile
 from difflib import unified_diff
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import aiofiles
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.background import BackgroundTask
 
 from appian_sentinel.agent.orchestrator import Orchestrator
@@ -24,13 +25,23 @@ from appian_sentinel.analyzer import pdf_extractor
 from appian_sentinel.config import settings
 from appian_sentinel.generator import xml_writer
 from appian_sentinel.generator.object_writer import write_object
-from appian_sentinel.integrations import ado_client
+from appian_sentinel.mcp_server import cache
+from appian_sentinel.mcp_server import tools as mcp_tools
+from appian_sentinel.models.object_registry import CAPABILITY_BY_SLUG
+from appian_sentinel.models.test_case import AppianAssertionType
 from appian_sentinel.models.workspace import Revision
 from appian_sentinel.packager import patch_builder, zip_builder
 from appian_sentinel.parser import codebase_map as codebase_map_mod
 from appian_sentinel.parser.sail_diagnostics import analyze_sail
 from appian_sentinel.parser.xml_parser import parse_appian_xml
 from appian_sentinel.security import mask_secret, mask_secrets
+from appian_sentinel.services.export_mutations import (
+    MutationError,
+    create_typed_object,
+    delete_typed_object,
+    get_typed_object,
+    update_typed_object,
+)
 from appian_sentinel.services.object_tests import (
     UnsupportedTestCaseError,
     clone_test_nodes,
@@ -46,9 +57,27 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
 
+_MAX_REQUIREMENT_FILES = 10
+_MAX_REQUIREMENT_FILE_BYTES = 20 * 1024 * 1024
+_MAX_REQUIREMENT_TOTAL_BYTES = 50 * 1024 * 1024
+_MAX_REQUIREMENT_TEXT = 1_000_000
+_REQUIREMENT_SUFFIXES = frozenset({".pdf", ".txt", ".md"})
+
 
 class ObjectUpdate(BaseModel):
     definition: str | None = None
+
+
+class TypedCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=500)
+    template_uuid: str = ""
+    fields: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = False
+
+
+class TypedUpdateBody(BaseModel):
+    fields: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = False
 
 
 class HistoryCommitBody(BaseModel):
@@ -65,7 +94,25 @@ class BulkTestCaseBody(BaseModel):
     name: str = Field(min_length=1)
     description: str = ""
     inputs: dict[str, Any] = Field(default_factory=dict)
-    expected: Any
+    assertion_type: AppianAssertionType = AppianAssertionType.OUTPUT_EQUALS
+    expected: Any = None
+    assertion_expression: str = ""
+
+    @model_validator(mode="after")
+    def validate_assertion(self) -> BulkTestCaseBody:
+        if self.assertion_type is AppianAssertionType.EXPRESSION:
+            if not self.assertion_expression.strip():
+                raise ValueError("Expression assertions require assertion_expression.")
+            if "test!output" not in self.assertion_expression.casefold():
+                raise ValueError("Expression assertions must reference test!output.")
+        elif self.assertion_expression.strip():
+            raise ValueError("assertion_expression requires assertion_type='expression'.")
+        if (
+            self.assertion_type is AppianAssertionType.COMPLETES_WITHOUT_ERROR
+            and self.expected is not None
+        ):
+            raise ValueError("No-error assertions cannot define expected.")
+        return self
 
 
 class BulkTestsBody(BaseModel):
@@ -134,6 +181,38 @@ def _get_session(request: Request) -> dict[str, Any]:
 # ------------------------------------------------------------------
 # File upload endpoints
 # ------------------------------------------------------------------
+
+
+async def _save_requirement_upload(
+    upload: UploadFile,
+    destination: Path,
+    remaining_bytes: int,
+) -> int:
+    """Stream one bounded requirement attachment to disk."""
+    limit = min(_MAX_REQUIREMENT_FILE_BYTES, remaining_bytes)
+    size = 0
+    async with aiofiles.open(destination, "wb") as target:
+        while chunk := await upload.read(1024 * 1024):
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Requirement attachments exceed the upload size limit.",
+                )
+            await target.write(chunk)
+    return size
+
+
+async def _requirement_attachment_text(path: Path) -> str:
+    if path.suffix.casefold() == ".pdf":
+        return await asyncio.to_thread(pdf_extractor.extract_pdf_text, path)
+    try:
+        return await asyncio.to_thread(path.read_text, encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{path.name} is not valid UTF-8 text.",
+        ) from exc
 
 
 @router.post("/upload")
@@ -284,13 +363,12 @@ async def upload_story(request: Request, file: UploadFile = File(...)) -> JSONRe
         result="ok",
     )
 
-    model = settings.sentinel_fast_model
     await _emit_route_progress(
         orchestrator,
         phase="llm.story_parse",
         current=0,
         total=1,
-        detail=f"Story parsing LLM call started: model {model}.",
+        detail="Story analysis started.",
     )
     try:
         story = await pdf_extractor.extract_user_story(story_path)
@@ -304,7 +382,7 @@ async def upload_story(request: Request, file: UploadFile = File(...)) -> JSONRe
             phase="llm.story_parse",
             current=1,
             total=1,
-            detail=f"Story parsing LLM call failed: model {model}: {safe_error}",
+            detail=f"Story analysis failed: {safe_error}",
             result="failed",
         )
         raise HTTPException(status_code=500, detail=f"Story parsing failed: {safe_error}")
@@ -313,7 +391,7 @@ async def upload_story(request: Request, file: UploadFile = File(...)) -> JSONRe
         phase="llm.story_parse",
         current=1,
         total=1,
-        detail=f"Story parsing LLM call completed: model {model}.",
+        detail="Story analysis completed.",
         result="ok",
     )
 
@@ -327,6 +405,116 @@ async def upload_story(request: Request, file: UploadFile = File(...)) -> JSONRe
 
     return JSONResponse({
         "status": "ok",
+        "story": state.user_story,
+    })
+
+
+@router.post("/stories")
+async def upload_requirement_files(
+    request: Request,
+    files: list[UploadFile] = File(...),
+) -> JSONResponse:
+    """Load multiple PDF or UTF-8 text attachments as one requirement."""
+    if not files or len(files) > _MAX_REQUIREMENT_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Attach between 1 and {_MAX_REQUIREMENT_FILES} requirement files.",
+        )
+
+    session = _get_session(request)
+    state: AgentState = session["state"]
+    orchestrator: Orchestrator = session["orchestrator"]
+    upload_dir = (
+        settings.sentinel_workspace.resolve()
+        / "requirements"
+        / f"{state.session_id}-{uuid4().hex[:8]}"
+    )
+    upload_dir.mkdir(parents=True, exist_ok=False)
+
+    total_bytes = 0
+    saved: list[Path] = []
+    source_sections: list[str] = []
+    try:
+        for index, upload in enumerate(files, start=1):
+            name = Path(upload.filename or f"attachment-{index}").name
+            suffix = Path(name).suffix.casefold()
+            if suffix not in _REQUIREMENT_SUFFIXES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{name} is not supported. Attach PDF, TXT, or MD files.",
+                )
+            destination = upload_dir / f"{index:02d}-{name}"
+            size = await _save_requirement_upload(
+                upload,
+                destination,
+                _MAX_REQUIREMENT_TOTAL_BYTES - total_bytes,
+            )
+            total_bytes += size
+            saved.append(destination)
+            text = await _requirement_attachment_text(destination)
+            source_sections.append(f"# Source: {name}\n{text}")
+            await _emit_route_progress(
+                orchestrator,
+                phase="requirements.upload",
+                current=index,
+                total=len(files),
+                detail=f"Loaded {name}.",
+            )
+
+        combined_text = "\n\n".join(source_sections)
+        if len(combined_text) > _MAX_REQUIREMENT_TEXT:
+            raise HTTPException(
+                status_code=413,
+                detail="Extracted requirement text exceeds the 1,000,000 character limit.",
+            )
+
+        await _emit_route_progress(
+            orchestrator,
+            phase="llm.requirements_parse",
+            current=0,
+            total=1,
+            detail="Requirement analysis started.",
+        )
+        source_id = ", ".join(path.name[3:] for path in saved)
+        story = await pdf_extractor.extract_user_story_from_text(
+            combined_text,
+            source_id=source_id,
+            source_kind="files",
+        )
+        state.user_story = story.model_dump()
+        state.story_path = str(upload_dir)
+    except HTTPException:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        safe_error = _mask_secrets(str(exc))
+        logger.error("Requirement file parsing failed: %s", safe_error)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Requirement parsing failed: {safe_error}",
+        ) from exc
+
+    await _emit_route_progress(
+        orchestrator,
+        phase="llm.requirements_parse",
+        current=1,
+        total=1,
+        detail="Requirement analysis completed.",
+        result="ok",
+    )
+    names = [path.name[3:] for path in saved]
+    await orchestrator._emit_status(
+        f"Loaded {len(names)} requirement files: {', '.join(names)}"
+    )
+    if state.codebase_map and session["run_task"] is None and state.export_dir:
+        session["run_task"] = asyncio.create_task(
+            orchestrator.run(Path(state.export_dir), None)
+        )
+
+    return JSONResponse({
+        "status": "ok",
+        "files": [{"name": name} for name in names],
         "story": state.user_story,
     })
 
@@ -350,9 +538,10 @@ async def chat(request: Request) -> JSONResponse:
     message = body.get("message", "").strip()
     if not message:
         raise HTTPException(status_code=400, detail="Empty message.")
+    object_uuids = [str(item) for item in (body.get("object_uuids") or []) if item]
 
     responses: list[dict[str, Any]] = []
-    async for msg in orchestrator.process_user_message(message):
+    async for msg in orchestrator.process_user_message(message, object_uuids=object_uuids):
         responses.append(msg.model_dump())
 
     return JSONResponse({"messages": responses})
@@ -430,6 +619,89 @@ async def get_object(request: Request, uuid: str) -> JSONResponse:
     if obj is None:
         raise HTTPException(status_code=404, detail=f"Object {uuid} not found.")
     return JSONResponse(obj)
+
+
+@router.get("/typed-objects/{slug}/{uuid}")
+async def get_typed_object_route(request: Request, slug: str, uuid: str) -> JSONResponse:
+    export_dir = _typed_export_dir(request)
+    try:
+        payload = get_typed_object(export_dir, _capability(slug).object_type, uuid)
+    except MutationError as exc:
+        raise HTTPException(status_code=400, detail={"reason": exc.reason, **exc.details}) from exc
+    return JSONResponse(payload)
+
+
+@router.post("/typed-objects/{slug}")
+async def create_typed_object_route(
+    request: Request,
+    slug: str,
+    body: TypedCreateBody,
+) -> JSONResponse:
+    state = _get_session(request)["state"]
+    export_dir = _typed_export_dir(request)
+    try:
+        payload = create_typed_object(
+            export_dir,
+            _capability(slug).object_type,
+            name=body.name,
+            template_uuid=body.template_uuid,
+            fields=body.fields,
+            preview=body.preview,
+        )
+    except MutationError as exc:
+        raise HTTPException(status_code=400, detail={"reason": exc.reason, **exc.details}) from exc
+    if not body.preview:
+        _refresh_session_codebase(state, export_dir)
+    return JSONResponse(payload)
+
+
+@router.put("/typed-objects/{slug}/{uuid}")
+async def update_typed_object_route(
+    request: Request,
+    slug: str,
+    uuid: str,
+    body: TypedUpdateBody,
+) -> JSONResponse:
+    state = _get_session(request)["state"]
+    export_dir = _typed_export_dir(request)
+    try:
+        payload = update_typed_object(
+            export_dir,
+            _capability(slug).object_type,
+            uuid,
+            body.fields,
+            preview=body.preview,
+        )
+    except MutationError as exc:
+        raise HTTPException(status_code=400, detail={"reason": exc.reason, **exc.details}) from exc
+    if not body.preview:
+        _refresh_session_codebase(state, export_dir)
+    return JSONResponse(payload)
+
+
+@router.delete("/typed-objects/{slug}/{uuid}")
+async def delete_typed_object_route(
+    request: Request,
+    slug: str,
+    uuid: str,
+    force: bool = False,
+    preview: bool = True,
+) -> JSONResponse:
+    state = _get_session(request)["state"]
+    export_dir = _typed_export_dir(request)
+    try:
+        payload = delete_typed_object(
+            export_dir,
+            _capability(slug).object_type,
+            uuid,
+            force=force,
+            preview=preview,
+        )
+    except MutationError as exc:
+        raise HTTPException(status_code=400, detail={"reason": exc.reason, **exc.details}) from exc
+    if not preview:
+        _refresh_session_codebase(state, export_dir)
+    return JSONResponse(payload)
 
 
 @router.put("/objects/{uuid}")
@@ -1080,8 +1352,8 @@ async def download_patch(request: Request) -> FileResponse:
 async def fetch_ado_work_item(request: Request) -> JSONResponse:
     """Fetch an ADO work item and load it as the session's user story.
 
-    Body: ``{"id": <work_item_id>, "org"?, "project"?, "source"?}``.
-    Falls back to persisted settings for org/project/PAT/source.
+    Body: ``{"id": <work_item_id>, "org"?, "project"?}``.
+    Uses the shared ADO MCP tool and persisted settings for org/project/PAT.
     """
     session = _get_session(request)
     state: AgentState = session["state"]
@@ -1092,39 +1364,37 @@ async def fetch_ado_work_item(request: Request) -> JSONResponse:
     if not work_item_id:
         raise HTTPException(status_code=400, detail="A work item id is required.")
 
-    source = (body.get("source") or settings.ado_source or "pat").strip().lower()
     org = (body.get("org") or settings.ado_org).strip()
     project = (body.get("project") or settings.ado_project).strip()
 
-    if source == "mcp":
-        # The standalone desktop app resolves 'mcp' via its own ADO-MCP bridge;
-        # the sidecar cannot reach the client's MCP connection.
+    if not settings.ado_pat:
         raise HTTPException(
-            status_code=501,
-            detail=(
-                "ADO source is set to 'mcp'. Fetch the work item through the "
-                "desktop app's ADO MCP bridge, or switch the source to 'pat'."
-            ),
+            status_code=400,
+            detail="No Azure DevOps access token configured. Add one in Settings.",
         )
 
-    if not settings.ado_pat:
-        raise HTTPException(status_code=400, detail="No ADO PAT configured. Add one in Settings.")
-
     try:
-        work_item = await ado_client.get_work_item(org, project, work_item_id, settings.ado_pat)
+        work_item = await mcp_tools.read_ado_work_item(
+            org,
+            project,
+            work_item_id,
+            settings.ado_pat,
+        )
     except Exception as exc:
         safe_error = _mask_secrets(str(exc))
         logger.error("ADO work item fetch failed: %s", safe_error)
-        raise HTTPException(status_code=502, detail=f"ADO fetch failed: {safe_error}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Azure DevOps fetch failed: {safe_error}",
+        )
 
     # Parse into a structured user story and load into state.
-    model = settings.sentinel_fast_model
     await _emit_route_progress(
         orchestrator,
         phase="llm.ado_story_parse",
         current=0,
         total=1,
-        detail=f"ADO story parsing LLM call started: model {model}.",
+        detail="Azure DevOps work item analysis started.",
     )
     try:
         story = await pdf_extractor.extract_user_story_from_text(
@@ -1141,7 +1411,7 @@ async def fetch_ado_work_item(request: Request) -> JSONResponse:
             phase="llm.ado_story_parse",
             current=1,
             total=1,
-            detail=f"ADO story parsing LLM call failed: model {model}: {safe_error}",
+            detail=f"Azure DevOps work item analysis failed: {safe_error}",
             result="failed",
         )
         raise HTTPException(status_code=500, detail=f"Story parsing failed: {safe_error}")
@@ -1150,11 +1420,13 @@ async def fetch_ado_work_item(request: Request) -> JSONResponse:
         phase="llm.ado_story_parse",
         current=1,
         total=1,
-        detail=f"ADO story parsing LLM call completed: model {model}.",
+        detail="Azure DevOps work item analysis completed.",
         result="ok",
     )
 
-    state.add_system_message(f"Loaded ADO work item #{work_item_id}: {work_item['title']}")
+    await orchestrator._emit_status(
+        f"Loaded Azure DevOps work item #{work_item_id}: {work_item['title']}"
+    )
 
     # Auto-start the workflow if the codebase is already loaded.
     if state.codebase_map and session.get("run_task") is None and state.export_dir:
@@ -1469,6 +1741,25 @@ async def test_settings() -> JSONResponse:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _capability(slug: str):
+    capability = CAPABILITY_BY_SLUG.get(slug)
+    if capability is None:
+        raise HTTPException(status_code=404, detail=f"Unknown object type: {slug}")
+    return capability
+
+
+def _typed_export_dir(request: Request) -> Path:
+    state: AgentState = _get_session(request)["state"]
+    if not state.export_dir:
+        raise HTTPException(status_code=404, detail="Codebase not loaded yet.")
+    return Path(state.export_dir).resolve()
+
+
+def _refresh_session_codebase(state: AgentState, export_dir: Path) -> None:
+    codebase = cache.get_codebase(export_dir, rebuild=True)
+    state.codebase_map = codebase.model_dump(mode="json")
+
 
 def _session_object(
     state: AgentState,

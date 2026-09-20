@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -10,6 +11,7 @@ import httpx
 from pydantic import BaseModel
 
 from appian_sentinel.config import settings
+from appian_sentinel.security import mask_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,26 @@ class UnsupportedProtocolFeatureError(ValueError):
 
 class LLMRequestError(RuntimeError):
     """Raised for an LLM HTTP or response-shape failure."""
+
+
+@dataclass(frozen=True, slots=True)
+class LLMToolCall:
+    """A single tool invocation requested by the model."""
+
+    id: str
+    name: str
+    # The raw OpenAI JSON object string, validated on parse and kept verbatim so
+    # it can be replayed in the next assistant message without re-serialising.
+    arguments: str
+
+
+@dataclass(frozen=True, slots=True)
+class LLMToolResponse:
+    """The assistant turn of a tool-enabled chat completion."""
+
+    content: str | None
+    tool_calls: tuple[LLMToolCall, ...]
+    finish_reason: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +309,47 @@ class LLMClient:
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMRequestError(f"Invalid {protocol} response shape.") from exc
 
+    @staticmethod
+    def _parse_tool_calls(raw_calls: Any) -> tuple[LLMToolCall, ...]:
+        """Validate the OpenAI tool_calls array into immutable call records."""
+        if raw_calls is None:
+            return ()
+        if not isinstance(raw_calls, list):
+            raise LLMRequestError("Invalid openai response shape: tool_calls must be a list.")
+
+        calls: list[LLMToolCall] = []
+        for raw in raw_calls:
+            function = raw.get("function") if isinstance(raw, dict) else None
+            if not isinstance(raw, dict) or not isinstance(function, dict):
+                raise LLMRequestError("Invalid openai response shape: malformed tool call.")
+
+            call_id = raw.get("id")
+            name = function.get("name")
+            arguments = function.get("arguments", "")
+            if not isinstance(call_id, str) or not call_id:
+                raise LLMRequestError("Invalid openai response shape: tool call has no id.")
+            if not isinstance(name, str) or not name:
+                raise LLMRequestError("Invalid openai response shape: tool call has no name.")
+            if not isinstance(arguments, str):
+                raise LLMRequestError(f"Tool call '{name}' arguments must be a JSON string.")
+
+            # Models emit an empty string for a tool that takes no arguments.
+            arguments = arguments.strip() or "{}"
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError as exc:
+                raise LLMRequestError(
+                    f"Tool call '{name}' has malformed JSON arguments: "
+                    f"{mask_secrets(arguments)[:400]}"
+                ) from exc
+            if not isinstance(parsed, dict):
+                raise LLMRequestError(
+                    f"Tool call '{name}' arguments must decode to a JSON object: "
+                    f"{mask_secrets(arguments)[:400]}"
+                )
+            calls.append(LLMToolCall(id=call_id, name=name, arguments=arguments))
+        return tuple(calls)
+
     # -- public API ----------------------------------------------------------
 
     async def chat(
@@ -361,6 +424,54 @@ class LLMClient:
             cleaned = "\n".join(lines)
 
         return response_schema.model_validate_json(cleaned)
+
+    async def chat_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]],
+        *,
+        tool_choice: str | dict[str, Any] = "auto",
+        model: str | None = None,
+    ) -> LLMToolResponse:
+        """Run one tool-calling turn and return content plus requested calls.
+
+        Tool calling is an OpenAI-protocol feature, so this always posts to
+        /v1/chat/completions whatever protocol the model would otherwise route
+        to. Messages are forwarded verbatim, which keeps assistant ``tool_calls``
+        and ``role: tool`` results linked by their ``tool_call_id``.
+        """
+        resolved_model = self._resolve_model(model)
+        logger.debug(
+            "LLM tool request | model=%s messages=%d tools=%d",
+            resolved_model,
+            len(messages),
+            len(tools),
+        )
+        payload: dict[str, Any] = {
+            "model": resolved_model,
+            "messages": list(messages),
+            "tools": list(tools),
+            "tool_choice": tool_choice,
+        }
+        data = await self._post_json("openai", payload, 120.0)
+        usage = data.get("usage")
+        self._log_usage(resolved_model, usage if isinstance(usage, dict) else None)
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise LLMRequestError("Invalid openai response shape.")
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise LLMRequestError("Invalid openai response shape.")
+
+        content = message.get("content")
+        finish_reason = choice.get("finish_reason")
+        return LLMToolResponse(
+            content=content if isinstance(content, str) else None,
+            tool_calls=self._parse_tool_calls(message.get("tool_calls")),
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+        )
 
     async def chat_stream(
         self,

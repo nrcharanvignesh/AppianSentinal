@@ -29,6 +29,29 @@
   font-family: var(--font-ui);
 }
 
+.rule-test-pane .adhoc-panel {
+  max-width: none;
+  margin: 0;
+  border: 0;
+}
+
+.rule-test-pane .adhoc-header,
+.rule-test-pane .adhoc-section {
+  padding: 12px;
+}
+
+.rule-test-pane .adhoc-header {
+  gap: 12px;
+}
+
+.rule-test-pane .adhoc-header h1 {
+  font-size: 15px;
+}
+
+.rule-test-pane .adhoc-header p {
+  font-size: 11px;
+}
+
 .adhoc-header {
   display: flex;
   align-items: flex-start;

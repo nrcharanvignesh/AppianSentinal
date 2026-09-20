@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from appian_sentinel.config import settings
+from appian_sentinel.models.object_registry import official_export_directories
 from appian_sentinel.models.workspace import FileChangeKind, FileDiff, Revision, StagedEntry
 
 _HISTORY_DIR = ".history"
@@ -30,26 +31,7 @@ _SECRET_METADATA_KEYS = frozenset(
         "private_key",
     }
 )
-_TRACKED_ROOTS = frozenset(
-    {
-        "META-INF",
-        "application",
-        "connectedSystem",
-        "content",
-        "dataStore",
-        "datatype",
-        "group",
-        "portal",
-        "processModel",
-        "processModelFolder",
-        "recordType",
-        "site",
-        "tempoReport",
-        "translationSet",
-        "translationString",
-        "webApi",
-    }
-)
+_TRACKED_ROOTS = official_export_directories()
 _OBJECT_ROOTS = _TRACKED_ROOTS - {"META-INF", "application"}
 
 

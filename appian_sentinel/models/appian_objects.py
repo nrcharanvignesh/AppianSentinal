@@ -36,6 +36,21 @@ class ObjectType(str, Enum):
     PORTAL = "portal"
     PROCESS_MODEL_FOLDER = "process_model_folder"
     TEMPO_REPORT = "tempo_report"
+    BUSINESS_PROCESS = "business_process"
+    PROCESS_REPORT = "process_report"
+    ROBOTIC_TASK = "robotic_task"
+    ROBOT_POOL = "robot_pool"
+    CONTROL_PANEL = "control_panel"
+    CONTROL_PANEL_HIERARCHY_ITEM = "control_panel_hierarchy_item"
+    DASHBOARD = "dashboard"
+    REPORT = "report"
+    AI_AGENT = "ai_agent"
+    AI_SKILL = "ai_skill"
+    EVENT_CONSUMER = "event_consumer"
+    GROUP_TYPE = "group_type"
+    DOCUMENT_FOLDER = "document_folder"
+    KNOWLEDGE_CENTER = "knowledge_center"
+    FEED = "feed"
     UNKNOWN = "unknown"
 
 
@@ -504,6 +519,72 @@ class TempoReport(AppianObject):
 
     def get_uuid_references(self) -> set[str]:
         return extract_uuid_references(self.expression or self.ui_expression)
+
+
+class PreservedObject(AppianObject):
+    """Typed identity for an official Appian object whose XML is kept raw."""
+
+    raw_xml: str = ""
+
+
+class BusinessProcess(PreservedObject):
+    object_type: ObjectType = ObjectType.BUSINESS_PROCESS
+
+
+class ProcessReport(PreservedObject):
+    object_type: ObjectType = ObjectType.PROCESS_REPORT
+
+
+class RoboticTask(PreservedObject):
+    object_type: ObjectType = ObjectType.ROBOTIC_TASK
+
+
+class RobotPool(PreservedObject):
+    object_type: ObjectType = ObjectType.ROBOT_POOL
+
+
+class ControlPanel(PreservedObject):
+    object_type: ObjectType = ObjectType.CONTROL_PANEL
+
+
+class ControlPanelHierarchyItem(PreservedObject):
+    object_type: ObjectType = ObjectType.CONTROL_PANEL_HIERARCHY_ITEM
+
+
+class Dashboard(PreservedObject):
+    object_type: ObjectType = ObjectType.DASHBOARD
+
+
+class Report(PreservedObject):
+    object_type: ObjectType = ObjectType.REPORT
+
+
+class AIAgent(PreservedObject):
+    object_type: ObjectType = ObjectType.AI_AGENT
+
+
+class AISkill(PreservedObject):
+    object_type: ObjectType = ObjectType.AI_SKILL
+
+
+class EventConsumer(PreservedObject):
+    object_type: ObjectType = ObjectType.EVENT_CONSUMER
+
+
+class GroupType(PreservedObject):
+    object_type: ObjectType = ObjectType.GROUP_TYPE
+
+
+class DocumentFolder(Folder):
+    object_type: ObjectType = ObjectType.DOCUMENT_FOLDER
+
+
+class KnowledgeCenter(Folder):
+    object_type: ObjectType = ObjectType.KNOWLEDGE_CENTER
+
+
+class Feed(PreservedObject):
+    object_type: ObjectType = ObjectType.FEED
 
 
 class Portal(AppianObject):

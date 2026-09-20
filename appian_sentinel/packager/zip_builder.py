@@ -163,13 +163,24 @@ def _updated_export_log(existing: str, modifications: list[dict[str, Any]]) -> s
         name = str(modification.get("name", "unknown")).replace('"', "'")
         if not object_uuid:
             continue
+        action = str(modification.get("action", "create")).strip().lower()
+        if action == "delete":
+            index = indexed.pop(object_uuid, None)
+            if index is not None:
+                success_lines[index] = ""
+            continue
         if object_uuid in indexed:
+            index = indexed[object_uuid]
+            match = _SUCCESS_LINE.match(success_lines[index] or "")
+            if match is not None:
+                success_lines[index] = f'{match.group(1)} {match.group(2)} {object_uuid} "{name}"'
             continue
         object_type = str(modification.get("export_type") or modification.get("type", "unknown"))
         numeric_id = int(modification.get("numeric_id", modification.get("id", 0)) or 0)
         entry = f'{object_type} {numeric_id} {object_uuid} "{name}"'
         indexed[object_uuid] = len(success_lines)
         success_lines.append(entry)
+    success_lines = [line for line in success_lines if line]
 
     body = [f"Success ({len(success_lines)}):", *success_lines]
     if suffix:

@@ -8,8 +8,45 @@ import AdHocTestPanel from './AdHocTestPanel';
 import BuildGrid from './BuildGrid';
 import ExpressionDocs from './ExpressionDocs';
 import ExpressionToolbar from './ExpressionToolbar';
+import { RuleInputsPanel, RuleTestPanel } from './RuleWorkspace';
 
 const SOURCE_FIELDS = ['definition', 'expression', 'value'];
+const RULE_PANE_STORAGE_KEY = 'appian-sentinel-rule-pane-sizes';
+
+function RuleResizeHandle({ label, onDelta }) {
+  function startResize(event) {
+    let previous = event.clientX;
+    const move = (moveEvent) => {
+      onDelta(moveEvent.clientX - previous);
+      previous = moveEvent.clientX;
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      document.body.classList.remove('is-resizing');
+    };
+    document.body.classList.add('is-resizing');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop, { once: true });
+    event.preventDefault();
+  }
+
+  return (
+    <div
+      className="rule-resize-handle"
+      role="separator"
+      aria-label={label}
+      aria-orientation="vertical"
+      tabIndex={0}
+      onPointerDown={startResize}
+      onKeyDown={(event) => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        onDelta(event.key === 'ArrowLeft' ? -16 : 16);
+      }}
+    />
+  );
+}
 
 function getSource(object) {
   const field = SOURCE_FIELDS.find((name) => typeof object?.[name] === 'string' && object[name]);
@@ -47,6 +84,62 @@ function HighlightedSource({ source, diagnostics }) {
   );
 }
 
+function InterfaceDesignView({ object, source }) {
+  const components = ['Text', 'Text Field', 'Dropdown', 'Button', 'Section', 'Columns', 'Grid'];
+  return (
+    <div className="interface-designer" aria-label="Interface design mode">
+      <aside className="interface-palette" aria-label="Component palette">
+        <div className="interface-pane-heading">
+          <strong>Palette</strong>
+          <span>Components</span>
+        </div>
+        <label className="interface-search">
+          <span className="sr-only">Search components</span>
+          <input type="search" placeholder="Search components" />
+        </label>
+        <div className="interface-component-list">
+          {components.map((component) => (
+            <button type="button" disabled key={component} title="Requires a live Appian designer">
+              <span aria-hidden="true">+</span>
+              {component}
+            </button>
+          ))}
+        </div>
+      </aside>
+      <section className="interface-live-view" aria-label="Interface live view">
+        <div className="interface-preview-toolbar">
+          <strong>Live View</strong>
+          <span>Desktop</span>
+          <button type="button" disabled>Preview</button>
+        </div>
+        <div className="interface-preview">
+          <div className="interface-preview-notice">
+            <strong>Preview requires an Appian runtime</strong>
+            <p>The exported expression remains available in Expression mode.</p>
+          </div>
+          <pre>{source.slice(0, 1200)}</pre>
+        </div>
+      </section>
+      <aside className="interface-configuration" aria-label="Component configuration">
+        <div className="interface-pane-heading">
+          <strong>Configuration</strong>
+          <span>Rule Inputs</span>
+        </div>
+        {(object.rule_inputs || []).length ? (
+          <ul>
+            {object.rule_inputs.map((input) => (
+              <li key={input.name}>
+                <strong>{input.name}</strong>
+                <span>{input.type_name || input.type || 'Any Type'}</span>
+              </li>
+            ))}
+          </ul>
+        ) : <p>No rule inputs.</p>}
+      </aside>
+    </div>
+  );
+}
+
 export default function EditorWorkspace({
   tabs,
   activeId,
@@ -74,6 +167,8 @@ export default function EditorWorkspace({
   const [indentGuide, setIndentGuide] = useState(false);
   const [showFunctionList, setShowFunctionList] = useState(false);
   const [docsFunction, setDocsFunction] = useState('');
+  const [savedTestCases, setSavedTestCases] = useState([]);
+  const [rulePaneSizes, setRulePaneSizes] = useState({ source: 190, inputs: 130 });
   const editorRef = useRef(null);
   const highlightRef = useRef(null);
   const lineNumbersRef = useRef(null);
@@ -81,17 +176,56 @@ export default function EditorWorkspace({
   const tab = tabs.find((item) => item.uuid === activeId);
   const symbols = useMemo(() => extractSymbols(source), [source]);
   const problems = diagnostics?.diagnostics || diagnostics?.items || [];
+  const isExpressionRule = object?.object_type === 'expression_rule';
+  const isInterface = object?.object_type === 'interface';
 
   useEffect(() => {
     const initial = getSource(object);
     setSource(initial);
     setSavedSource(initial);
     historyRef.current = { items: [initial], index: 0 };
-    setView('source');
+    setView(object?.object_type === 'interface' ? 'design' : 'source');
     setCopyState('Copy source');
   }, [object]);
 
   useEffect(() => setSaveState(''), [activeId]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        window.localStorage.getItem(RULE_PANE_STORAGE_KEY) || '{}',
+      );
+      setRulePaneSizes({
+        source: Math.max(170, Math.min(420, Number(saved.source) || 190)),
+        inputs: Math.max(120, Math.min(280, Number(saved.inputs) || 130)),
+      });
+    } catch {
+      setRulePaneSizes({ source: 190, inputs: 130 });
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      RULE_PANE_STORAGE_KEY,
+      JSON.stringify(rulePaneSizes),
+    );
+  }, [rulePaneSizes]);
+
+  useEffect(() => {
+    let active = true;
+    if (!activeId || !isExpressionRule) {
+      setSavedTestCases([]);
+      return () => { active = false; };
+    }
+    api.objectTests(activeId)
+      .then((value) => {
+        if (active) setSavedTestCases(Array.isArray(value?.tests) ? value.tests : []);
+      })
+      .catch(() => {
+        if (active) setSavedTestCases([]);
+      });
+    return () => { active = false; };
+  }, [activeId, isExpressionRule]);
 
   useEffect(() => {
     if (!jumpRequest || jumpRequest.uuid !== activeId) return;
@@ -247,7 +381,7 @@ export default function EditorWorkspace({
           </h1>
           <p>
             {codebaseLoading
-              ? 'Reading application objects from the sidecar.'
+              ? 'Reading application objects.'
               : 'Use Import application in the top bar to load an Appian export ZIP.'}
           </p>
         </div>
@@ -257,12 +391,18 @@ export default function EditorWorkspace({
         <>
           <div className="editor-toolbar">
             <div className="segmented" role="tablist" aria-label="Object view">
-              <button type="button" role="tab" aria-selected={view === 'source'} onClick={() => setView('source')}>Source</button>
+              {isInterface && (
+                <button type="button" role="tab" aria-selected={view === 'design'} onClick={() => setView('design')}>Design</button>
+              )}
+              <button type="button" role="tab" aria-selected={view === 'source'} onClick={() => setView('source')}>
+                {isInterface ? 'Expression' : 'Source'}
+              </button>
               <button type="button" role="tab" aria-selected={view === 'metadata'} onClick={() => setView('metadata')}>Metadata</button>
-              <button type="button" role="tab" aria-selected={view === 'test'} onClick={() => setView('test')}>Ad Hoc Test</button>
+              {!isExpressionRule && (
+                <button type="button" role="tab" aria-selected={view === 'test'} onClick={() => setView('test')}>Ad Hoc Test</button>
+              )}
             </div>
             <div className="editor-actions">
-              <span className="object-type">{object?.object_type?.replaceAll('_', ' ') || 'object'}</span>
               <button type="button" className="secondary-button" disabled={!source || loading} onClick={copySource}>{copyState}</button>
               <button
                 type="button"
@@ -277,6 +417,7 @@ export default function EditorWorkspace({
           </div>
           <div className="object-context">
             <strong>{tab.name}</strong>
+            <span className="object-type">{object?.object_type?.replaceAll('_', ' ') || 'object'}</span>
             <span>{tab.uuid}</span>
           </div>
           <div className="editor-content" aria-live="polite">
@@ -295,54 +436,122 @@ export default function EditorWorkspace({
             )}
             {!loading && !error && object && view === 'source' && (
               source ? (
-                <div className="editor-with-outline">
-                  <div className="code-editor">
-                    <LineNumbers value={source} numbersRef={lineNumbersRef} />
-                    <div className="source-layers">
-                      <div className="highlight-scroll" ref={highlightRef}>
-                        <HighlightedSource source={source} diagnostics={problems} />
+                isExpressionRule ? (
+                  <div
+                    className="appian-rule-workspace"
+                    style={{
+                      '--rule-source-width': `${rulePaneSizes.source}px`,
+                      '--rule-input-width': `${rulePaneSizes.inputs}px`,
+                    }}
+                  >
+                    <section className="rule-source-pane" aria-label="Rule source">
+                      <div className="code-editor">
+                        <LineNumbers value={source} numbersRef={lineNumbersRef} />
+                        <div className="source-layers">
+                          <div className="highlight-scroll" ref={highlightRef}>
+                            <HighlightedSource source={source} diagnostics={problems} />
+                          </div>
+                          <textarea
+                            ref={editorRef}
+                            aria-label={`${tab.name} source editor`}
+                            value={source}
+                            onChange={(event) => recordChange(event.target.value)}
+                            onDoubleClick={followReference}
+                            onKeyDown={editorShortcut}
+                            onKeyUp={captureSelection}
+                            onSelect={captureSelection}
+                            onClick={captureSelection}
+                            onScroll={syncScroll}
+                            spellCheck="false"
+                          />
+                        </div>
                       </div>
-                      <textarea
-                        ref={editorRef}
-                        aria-label={`${tab.name} source editor`}
-                        value={source}
-                        onChange={(event) => recordChange(event.target.value)}
-                        onDoubleClick={followReference}
-                        onKeyDown={editorShortcut}
-                        onKeyUp={captureSelection}
-                        onSelect={captureSelection}
-                        onClick={captureSelection}
-                        onScroll={syncScroll}
-                        spellCheck="false"
-                      />
-                    </div>
-                  </div>
-                  <aside className="symbol-outline" aria-label="Symbol outline">
-                    <h3>Outline</h3>
-                    {symbols.length ? symbols.map((symbol) => (
-                      <button
-                        type="button"
-                        key={`${symbol.kind}-${symbol.offset}`}
-                        onClick={() => jumpTo(symbol.offset)}
-                      >
-                        <b>{symbol.kind}</b>
-                        <span>{symbol.name}</span>
-                        <small>{symbol.line}</small>
-                      </button>
-                    )) : <p>No symbols found.</p>}
-                  </aside>
-                  {showFunctionList && (
-                    <ExpressionDocs
-                      functionName={docsFunction}
-                      showFunctions
-                      onSelectFunction={setDocsFunction}
+                    </section>
+                    <RuleResizeHandle
+                      label="Resize rule source"
+                      onDelta={(delta) => setRulePaneSizes((current) => ({
+                        ...current,
+                        source: Math.max(170, Math.min(420, current.source + delta)),
+                      }))}
                     />
-                  )}
-                </div>
+                    <RuleTestPanel
+                      ruleInputs={object.rule_inputs || []}
+                      savedTestCases={savedTestCases}
+                      onRunTest={(inputs) => api.runObjectStaticTest(activeId, inputs)}
+                    />
+                    <RuleResizeHandle
+                      label="Resize rule inputs"
+                      onDelta={(delta) => setRulePaneSizes((current) => ({
+                        ...current,
+                        inputs: Math.max(120, Math.min(280, current.inputs - delta)),
+                      }))}
+                    />
+                    <RuleInputsPanel
+                      ruleInputs={object.rule_inputs || []}
+                      symbols={symbols}
+                      onJumpTo={jumpTo}
+                    />
+                    {showFunctionList && (
+                      <ExpressionDocs
+                        functionName={docsFunction}
+                        showFunctions
+                        onSelectFunction={setDocsFunction}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <div className="editor-with-outline">
+                    <div className="code-editor">
+                      <LineNumbers value={source} numbersRef={lineNumbersRef} />
+                      <div className="source-layers">
+                        <div className="highlight-scroll" ref={highlightRef}>
+                          <HighlightedSource source={source} diagnostics={problems} />
+                        </div>
+                        <textarea
+                          ref={editorRef}
+                          aria-label={`${tab.name} source editor`}
+                          value={source}
+                          onChange={(event) => recordChange(event.target.value)}
+                          onDoubleClick={followReference}
+                          onKeyDown={editorShortcut}
+                          onKeyUp={captureSelection}
+                          onSelect={captureSelection}
+                          onClick={captureSelection}
+                          onScroll={syncScroll}
+                          spellCheck="false"
+                        />
+                      </div>
+                    </div>
+                    <aside className="symbol-outline" aria-label="Symbol outline">
+                      <h3>Outline</h3>
+                      {symbols.length ? symbols.map((symbol) => (
+                        <button
+                          type="button"
+                          key={`${symbol.kind}-${symbol.offset}`}
+                          onClick={() => jumpTo(symbol.offset)}
+                        >
+                          <b>{symbol.kind}</b>
+                          <span>{symbol.name}</span>
+                          <small>{symbol.line}</small>
+                        </button>
+                      )) : <p>No symbols found.</p>}
+                    </aside>
+                    {showFunctionList && (
+                      <ExpressionDocs
+                        functionName={docsFunction}
+                        showFunctions
+                        onSelectFunction={setDocsFunction}
+                      />
+                    )}
+                  </div>
+                )
               ) : <div className="center-state">This object has no editable source definition.</div>
             )}
             {!loading && !error && object && view === 'metadata' && (
               <pre className="metadata-view">{JSON.stringify(object, null, 2)}</pre>
+            )}
+            {!loading && !error && object && view === 'design' && isInterface && (
+              <InterfaceDesignView object={object} source={source} />
             )}
             {!loading && !error && object && view === 'test' && (
               <AdHocTestPanel

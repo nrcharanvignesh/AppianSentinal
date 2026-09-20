@@ -55,6 +55,14 @@ class TestExecutionScope(str, Enum):
     LIVE_APPIAN = "live_appian"
 
 
+class AppianAssertionType(str, Enum):
+    """Assertion modes supported by Appian expression-rule test cases."""
+
+    COMPLETES_WITHOUT_ERROR = "completes_without_error"
+    OUTPUT_EQUALS = "output_equals"
+    EXPRESSION = "expression"
+
+
 # Test types that cannot be proven without a running Appian environment.
 LIVE_APPIAN_TEST_TYPES: frozenset[TestCaseType] = frozenset({
     TestCaseType.PERFORMANCE,
@@ -103,6 +111,9 @@ class TestCase(BaseModel):
     preconditions: list[str] = Field(default_factory=list)
     steps: list[TestStep] = Field(default_factory=list)
     expected_result: str = ""
+    assertion_type: AppianAssertionType = AppianAssertionType.COMPLETES_WITHOUT_ERROR
+    asserted_output: Any = None
+    assertion_expression: str = ""
     priority: TestCasePriority = TestCasePriority.MEDIUM
     execution_scope: TestExecutionScope = TestExecutionScope.STATIC
 
@@ -111,6 +122,18 @@ class TestCase(BaseModel):
         """Pin performance and accessibility tests to the live-Appian scope."""
         if self.type in LIVE_APPIAN_TEST_TYPES:
             self.execution_scope = TestExecutionScope.LIVE_APPIAN
+        if self.assertion_type is AppianAssertionType.EXPRESSION:
+            if not self.assertion_expression.strip():
+                raise ValueError("Expression assertions require assertion_expression.")
+            if "test!output" not in self.assertion_expression.casefold():
+                raise ValueError("Expression assertions must reference test!output.")
+        elif self.assertion_expression.strip():
+            raise ValueError("assertion_expression requires assertion_type='expression'.")
+        if (
+            self.assertion_type is AppianAssertionType.COMPLETES_WITHOUT_ERROR
+            and self.asserted_output is not None
+        ):
+            raise ValueError("No-error assertions cannot define asserted_output.")
         return self
 
 

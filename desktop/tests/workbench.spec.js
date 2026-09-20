@@ -10,6 +10,11 @@ const SCREENSHOT_LOADING = path.join(SCREENSHOT_DIR, 'workbench-loading-1440x900
 const SCREENSHOT_ERROR = path.join(SCREENSHOT_DIR, 'workbench-error-1440x900.png');
 const SCREENSHOT_DARK = path.join(SCREENSHOT_DIR, 'workbench-dark-1440x900.png');
 const SCREENSHOT_LIGHT = path.join(SCREENSHOT_DIR, 'workbench-light-1440x900.png');
+const DESIGNER_DARK_1440 = path.join(SCREENSHOT_DIR, 'designer-dark-1440x900.png');
+const DESIGNER_DARK_1024 = path.join(SCREENSHOT_DIR, 'designer-dark-1024x640.png');
+const DESIGNER_LIGHT_1440 = path.join(SCREENSHOT_DIR, 'designer-light-1440x900.png');
+const DESIGNER_LIGHT_1024 = path.join(SCREENSHOT_DIR, 'designer-light-1024x640.png');
+const PENDING_DELETE_1440 = path.join(SCREENSHOT_DIR, 'pending-deletion-1440x900.png');
 const TAB_NAMES = ['Problems', 'Dependencies', 'Tests', 'Changes', 'History', 'Output'];
 const EMPTY_EXPLORER = 'Import an Appian export to begin.';
 const UUID = '_a-11111111-1111-8000-1111-111111111111_100001';
@@ -37,13 +42,23 @@ async function stubSidecar(page, options = {}) {
     models = null,
     modelsError = '',
     settingsTestError = '',
+    socketMessages = [],
   } = typeof options === 'boolean' ? { loaded: options } : options;
   const calls = [];
-  await page.routeWebSocket('**/ws**', () => {});
+  await page.routeWebSocket('**/ws**', (socket) => {
+    setTimeout(() => {
+      socketMessages.forEach((message) => socket.send(JSON.stringify(message)));
+    }, 100);
+  });
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const routeCall = { method: request.method(), path: url.pathname, body: null };
+    const routeCall = {
+      method: request.method(),
+      path: url.pathname,
+      params: Object.fromEntries(url.searchParams),
+      body: null,
+    };
     if (request.method() !== 'GET' && request.headers()['content-type']?.includes('application/json')) {
       routeCall.body = request.postDataJSON();
     }
@@ -103,12 +118,24 @@ async function stubSidecar(page, options = {}) {
           end_column: 14,
         }],
       };
+    } else if (url.pathname === `/api/objects/${UUID}/tests`) {
+      body = {
+        object_uuid: UUID,
+        tests: [{
+          name: 'Positive total',
+          description: 'Returns a total for a valid value.',
+          inputs: { value: '10' },
+          assertion_type: 'output_equals',
+          expected: '10',
+        }],
+      };
     } else if (url.pathname === `/api/objects/${UUID}`) {
       body = {
         uuid: UUID,
         name: 'APP_Test',
         object_type: 'expression_rule',
         definition: routeCall.body?.definition || SOURCE,
+        rule_inputs: [{ name: 'value', type_name: 'Integer', is_list: false }],
       };
     } else if (url.pathname === `/api/objects/${HELPER_UUID}`
       || url.pathname === `/api/objects/${HELPER_UUID_2}`) {
@@ -132,8 +159,17 @@ async function stubSidecar(page, options = {}) {
     } else if (url.pathname === '/api/settings/test' && settingsTestError) {
       status = 502;
       body = { status: 'error', message: settingsTestError };
-    } else if (url.pathname === '/api/story') {
-      body = { title: 'Uploaded story' };
+    } else if (url.pathname === '/api/stories') {
+      body = { files: [{ name: 'story.pdf' }, { name: 'notes.md' }] };
+    } else if (url.pathname.startsWith('/api/typed-objects/') && request.method() === 'DELETE') {
+      body = {
+        status: 'deleted',
+        uuid: decodeURIComponent(url.pathname.split('/').at(-1)),
+        file_path: 'content/deleted.xml',
+        dependents: [],
+        children: [],
+        forced: url.searchParams.get('force') === 'true',
+      };
     } else if (objectTypeByUuid && url.pathname.startsWith('/api/objects/')) {
       const uuid = url.pathname.split('/')[3];
       body = {
@@ -167,6 +203,14 @@ async function openWorkbench(page, loaded = false) {
 
 // A click that lands before React hydrates is swallowed: the tab takes focus
 // but never becomes selected. Retry until the selection actually moves.
+async function openSettings(page) {
+  const button = page.getByRole('button', { name: 'Settings' });
+  await expect(async () => {
+    await button.click();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15000 });
+}
+
 async function openTab(page, name) {
   const tab = page.getByRole('tab', { name });
   await expect(async () => {
@@ -197,7 +241,7 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     const brand = page.getByLabel('Appian Sentinel');
     await expect(brand).toBeVisible();
     await expect(brand).toContainText('Appian Sentinel');
-    await expect(brand.locator('img')).toHaveAttribute('src', '/icon.png');
+    await expect(brand.locator('svg')).toBeVisible();
   });
 
   test('dark mode is default and light mode persists', async ({ page }) => {
@@ -222,7 +266,7 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openWorkbench(page);
     const explorer = page.getByRole('separator', { name: 'Resize object explorer' });
-    const assistant = page.getByRole('separator', { name: 'Resize assistant' });
+    const editor = page.getByRole('separator', { name: 'Resize assistant' });
     const results = page.getByRole('separator', { name: 'Resize results panel' });
 
     const explorerBefore = Number(await explorer.getAttribute('aria-valuenow'));
@@ -233,10 +277,10 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await page.mouse.up();
     await expect(explorer).toHaveAttribute('aria-valuenow', String(explorerBefore + 40));
 
-    const assistantBefore = Number(await assistant.getAttribute('aria-valuenow'));
-    await assistant.focus();
+    const editorBefore = Number(await editor.getAttribute('aria-valuenow'));
+    await editor.focus();
     await page.keyboard.press('ArrowLeft');
-    await expect(assistant).toHaveAttribute('aria-valuenow', String(assistantBefore + 16));
+    await expect(editor).toHaveAttribute('aria-valuenow', String(editorBefore + 16));
 
     const resultsBefore = Number(await results.getAttribute('aria-valuenow'));
     await results.focus();
@@ -245,14 +289,14 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
 
     const saved = {
       explorer: await explorer.getAttribute('aria-valuenow'),
-      assistant: await assistant.getAttribute('aria-valuenow'),
+      editor: await editor.getAttribute('aria-valuenow'),
       results: await results.getAttribute('aria-valuenow'),
     };
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page.getByRole('separator', { name: 'Resize object explorer' }))
       .toHaveAttribute('aria-valuenow', saved.explorer);
     await expect(page.getByRole('separator', { name: 'Resize assistant' }))
-      .toHaveAttribute('aria-valuenow', saved.assistant);
+      .toHaveAttribute('aria-valuenow', saved.editor);
     await expect(page.getByRole('separator', { name: 'Resize results panel' }))
       .toHaveAttribute('aria-valuenow', saved.results);
   });
@@ -262,6 +306,127 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     const explorer = page.getByRole('complementary', { name: 'Object explorer' });
     await expect(explorer).toBeVisible();
     await expect(explorer).toContainText(EMPTY_EXPLORER);
+  });
+
+  test('object type filter and chat selection', async ({ page }) => {
+    await stubSidecar(page, {
+      loaded: true,
+      byType: { expression_rule: [UUID], interface: [HELPER_UUID] },
+      uuidToName: { [UUID]: 'APP_Test', [HELPER_UUID]: 'APP_Iface' },
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('treeitem', { name: 'APP_Test' })).toBeVisible();
+    await page.getByLabel('Filter object type').selectOption('interface');
+    await expect(page.getByRole('treeitem', { name: 'APP_Iface' })).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: 'APP_Test' })).toHaveCount(0);
+    await page.getByLabel('Add APP_Iface to chat').check();
+    await expect(page.getByLabel('Selected chat objects')).toContainText('APP_Iface');
+  });
+
+  test('tool activity renders the orchestrator metadata shape and statuses', async ({ page }) => {
+    const toolMessage = (status) => ({
+      type: 'message',
+      data: {
+        id: `tool-${status}`,
+        role: 'assistant',
+        message_type: 'tool',
+        content: `Tool read_object ${status}.`,
+        metadata: {
+          call_id: `call-${status}`,
+          tool: 'read_object',
+          status,
+          object_uuids: [UUID],
+          result_summary: status,
+        },
+      },
+    });
+    await stubSidecar(page, {
+      loaded: true,
+      socketMessages: ['ok', 'blocked', 'failed'].map(toolMessage),
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    await expect(page.getByLabel('Tool calls')).toHaveCount(3);
+    await expect(page.locator('.tool-call-list code')).toHaveText([
+      'read_object', 'read_object', 'read_object',
+    ]);
+    await expect(page.locator('.messages .object-chip strong')).toHaveText([
+      'APP_Test', 'APP_Test', 'APP_Test',
+    ]);
+    await expect(page.locator('.tool-status.is-ok')).toHaveText('ok');
+    await expect(page.locator('.tool-status.is-blocked')).toHaveText('blocked');
+    await expect(page.locator('.tool-status.is-failed')).toHaveText('failed');
+  });
+
+  test('chat pending deletion requires confirmation and force opt-in', async ({ page }) => {
+    const deleteUuid = 'constant-delete-uuid';
+    const pending = {
+      type: 'message',
+      data: {
+        id: 'pending-delete',
+        role: 'assistant',
+        message_type: 'tool',
+        content: 'Raw delete result must not be shown.',
+        metadata: {
+          tool: 'delete_constant',
+          status: 'ok',
+          object_uuids: [deleteUuid],
+          result: {
+            result: {
+              status: 'pending_deletion',
+              pending_deletion: true,
+              applied: false,
+              tool: 'delete_constant',
+              object: { uuid: deleteUuid, name: 'APP_MaxRetries', type: 'constant' },
+              reverse_dependencies: [HELPER_UUID],
+              children: [],
+              confirmation: {
+                required: true,
+                action: 'delete_typed_object',
+                slug: 'constant',
+                object_uuid: deleteUuid,
+                preview: false,
+                force_required: true,
+              },
+            },
+          },
+        },
+      },
+    };
+    const calls = await stubSidecar(page, {
+      loaded: true,
+      byType: { constant: [deleteUuid], expression_rule: [HELPER_UUID] },
+      uuidToName: { [deleteUuid]: 'APP_MaxRetries', [HELPER_UUID]: 'APP_Helper' },
+      objectTypeByUuid: { [deleteUuid]: 'constant', [HELPER_UUID]: 'expression_rule' },
+      socketMessages: [pending],
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+
+    const confirmation = page.getByRole('region', { name: 'Confirm deletion of APP_MaxRetries' });
+    await expect(confirmation).toContainText('Nothing has been deleted yet.');
+    await expect(confirmation).toContainText('Deleting cannot be undone.');
+    await expect(confirmation).toContainText('APP_Helper');
+    await expect(page.getByText('Raw delete result must not be shown.')).toHaveCount(0);
+    await expect(confirmation.getByRole('button', { name: 'Delete object' })).toBeDisabled();
+    expect(calls.filter((call) => call.method === 'DELETE')).toEqual([]);
+    fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+    await page.screenshot({ path: PENDING_DELETE_1440, fullPage: false });
+
+    await confirmation.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByText('Deletion cancelled. Nothing was deleted.')).toBeVisible();
+    expect(calls.filter((call) => call.method === 'DELETE')).toEqual([]);
+
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const nextConfirmation = page.getByRole('region', { name: 'Confirm deletion of APP_MaxRetries' });
+    await nextConfirmation.getByLabel('Force deletion. Dependent objects will break.').check();
+    await nextConfirmation.getByRole('button', { name: 'Delete object' }).click();
+    await expect(page.getByText('APP_MaxRetries was deleted.')).toBeVisible();
+
+    const deletes = calls.filter((call) => call.method === 'DELETE');
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0].path).toBe(`/api/typed-objects/constant/${encodeURIComponent(deleteUuid)}`);
+    expect(deletes[0].params).toMatchObject({ preview: 'false', force: 'true' });
   });
 
   test('empty state renders intended copy and evidence', async ({ page }) => {
@@ -292,7 +457,7 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await stubSidecar(page, { codebaseError: 'sidecar_unavailable' });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('.tree-state[role="alert"]')).toContainText(
-      'Could not load objects: sidecar_unavailable',
+      'Could not load application objects.',
     );
     await page.screenshot({ path: SCREENSHOT_ERROR, fullPage: false });
     expect(fs.existsSync(SCREENSHOT_ERROR), `${SCREENSHOT_ERROR} must exist`).toBeTruthy();
@@ -438,9 +603,93 @@ test.describe('R28-R30 workbench rendered checks (no codebase loaded)', () => {
     await expect(page.getByText('History disabled: load an export first.')).toBeVisible();
     // Settings is the exception: testing and saving the connection are the
     // recovery path, so gating them on being online would trap the operator.
-    await openTab(page, 'Settings');
+    await openSettings(page);
     await expect(page.getByRole('button', { name: 'Test', exact: true })).toBeEnabled();
     await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+  });
+
+  test('explorer tree expands, collapses, and relabels chat checkboxes', async ({ page }) => {
+    await openWorkbench(page, true);
+    const group = page.getByRole('treeitem', { name: /^Expression Rule/ });
+    await group.focus();
+    await expect(group).toHaveAttribute('aria-expanded', 'true');
+
+    await page.keyboard.press('ArrowLeft');
+    await expect(group).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.getByRole('treeitem', { name: 'APP_Test' })).toHaveCount(0);
+
+    await page.keyboard.press('ArrowRight');
+    await expect(group).toHaveAttribute('aria-expanded', 'true');
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByRole('treeitem', { name: 'APP_Test' })).toBeFocused();
+
+    await page.keyboard.press('ArrowLeft');
+    await expect(group).toBeFocused();
+
+    // A checked box must not still say "Add": the label has to describe the
+    // action the operator would take next.
+    await page.getByLabel('Add APP_Test to chat').check();
+    await expect(page.getByLabel('Remove APP_Test from chat')).toBeChecked();
+  });
+
+  test('dark mode Import and status bar meet 4.5:1 contrast', async ({ page }) => {
+    await openWorkbench(page);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+    const ratios = await page.evaluate(() => {
+      const channel = (part) => {
+        const value = part / 255;
+        return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      };
+      const luminance = (color) => {
+        const [r, g, b] = color.match(/\d+(\.\d+)?/g).map(Number);
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+      };
+      const backdrop = (element) => {
+        let node = element;
+        while (node) {
+          const value = window.getComputedStyle(node).backgroundColor;
+          if (value && !value.startsWith('rgba(0, 0, 0, 0)')) return value;
+          node = node.parentElement;
+        }
+        return 'rgb(255, 255, 255)';
+      };
+      const ratio = (element) => {
+        const style = window.getComputedStyle(element);
+        const first = luminance(style.color);
+        const second = luminance(backdrop(element));
+        return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+      };
+      return {
+        import: ratio(
+          [...document.querySelectorAll('.topbar .primary-button')]
+            .find((node) => node.textContent.includes('Import application')),
+        ),
+        statusbar: ratio(document.querySelector('.statusbar')),
+      };
+    });
+
+    expect(ratios.import, `Import contrast ${ratios.import.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+    expect(ratios.statusbar, `status bar contrast ${ratios.statusbar.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+  });
+
+  test('settings traps focus, closes with Escape, and restores focus', async ({ page }) => {
+    await openWorkbench(page);
+    const opener = page.getByRole('button', { name: 'Settings' });
+    await opener.focus();
+    await opener.click();
+
+    const dialog = page.getByRole('dialog', { name: 'Settings' });
+    await expect(dialog).toBeVisible();
+    await expect(page.getByLabel('Model service URL')).toBeFocused();
+
+    await dialog.getByRole('button', { name: 'Save', exact: true }).focus();
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
   });
 });
 
@@ -454,7 +703,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     await expect(page.locator('.sail-string.is-invalid').filter({ hasText: "'bad'" })).toBeVisible();
     await expect(page.locator('.has-diagnostic')).toBeVisible();
 
-    const outline = page.getByLabel('Symbol outline');
+    const outline = page.getByRole('complementary', { name: 'Rule inputs' });
     await expect(outline).toContainText('value');
     await expect(outline).toContainText('total');
     await expect(outline).toContainText('a!textField');
@@ -548,14 +797,16 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
         name: 'Generated test',
         description: '',
         inputs: {},
+        assertion_type: 'output_equals',
         expected: null,
+        assertion_expression: '',
       }],
       preview: true,
     });
     expect(bulkCalls[1].body.preview).toBe(false);
   });
 
-  test('history restore and PDF upload use correct routes', async ({ page }) => {
+  test('history restore and chat requirement intake use correct routes', async ({ page }) => {
     const calls = await openWorkbench(page, true);
     await page.getByRole('tab', { name: 'History' }).click();
     const restore = page.getByRole('button', { name: 'Restore' });
@@ -563,20 +814,31 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     await restore.click();
     await expect(page.getByText('Restore error: workspace_not_clean')).toBeVisible();
 
-    await page.getByRole('tab', { name: 'ADO' }).click();
-    await page.getByLabel('User story PDF').setInputFiles({
-      name: 'story.pdf',
-      mimeType: 'application/pdf',
-      buffer: Buffer.from('%PDF-1.4 test'),
-    });
-    await expect(page.getByText('PDF story.pdf loaded.')).toBeVisible();
+    await page.getByLabel('Attach files').setInputFiles([
+      {
+        name: 'story.pdf',
+        mimeType: 'application/pdf',
+        buffer: Buffer.from('%PDF-1.4 test'),
+      },
+      {
+        name: 'notes.md',
+        mimeType: 'text/markdown',
+        buffer: Buffer.from('# Notes'),
+      },
+    ]);
+    await expect(page.getByText('2 requirement files loaded.')).toBeVisible();
+
+    await page.getByLabel('Azure DevOps work item').fill('42');
+    await page.getByRole('button', { name: 'Load work item' }).click();
+    await expect(page.getByText('Work item 42 loaded.')).toBeVisible();
 
     expect(calls.some((call) => (
       call.method === 'POST'
       && call.path === '/api/history/restore'
       && call.body?.revision === 'revision-1'
     ))).toBeTruthy();
-    expect(calls.some((call) => call.method === 'POST' && call.path === '/api/story')).toBeTruthy();
+    expect(calls.some((call) => call.method === 'POST' && call.path === '/api/stories')).toBeTruthy();
+    expect(calls.some((call) => call.method === 'POST' && call.path === '/api/ado/workitem')).toBeTruthy();
   });
 
   test('loaded workbench has no console errors, overflow, or non-ASCII text', async ({ page }) => {
@@ -589,8 +851,8 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
 
     fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
     for (const viewport of [
-      { width: 1024, height: 640, path: SCREENSHOT_1024 },
-      { width: 1440, height: 900, path: SCREENSHOT_1440 },
+      { width: 1024, height: 640, path: SCREENSHOT_1024, evidence: DESIGNER_DARK_1024 },
+      { width: 1440, height: 900, path: SCREENSHOT_1440, evidence: DESIGNER_DARK_1440 },
     ]) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.waitForTimeout(150);
@@ -599,6 +861,17 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
         clientWidth: document.documentElement.clientWidth,
       }));
       expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+      await page.screenshot({ path: viewport.path, fullPage: false });
+      await page.screenshot({ path: viewport.evidence, fullPage: false });
+    }
+
+    await page.getByRole('button', { name: 'Use light mode' }).click();
+    for (const viewport of [
+      { width: 1024, height: 640, path: DESIGNER_LIGHT_1024 },
+      { width: 1440, height: 900, path: DESIGNER_LIGHT_1440 },
+    ]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.waitForTimeout(150);
       await page.screenshot({ path: viewport.path, fullPage: false });
     }
 
@@ -623,6 +896,153 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     expect(consoleErrors).toEqual([]);
     expect(fs.existsSync(SCREENSHOT_1024)).toBeTruthy();
     expect(fs.existsSync(SCREENSHOT_1440)).toBeTruthy();
+    for (const evidence of [
+      DESIGNER_DARK_1024,
+      DESIGNER_DARK_1440,
+      DESIGNER_LIGHT_1024,
+      DESIGNER_LIGHT_1440,
+    ]) {
+      expect(fs.existsSync(evidence), `${evidence} must exist`).toBeTruthy();
+    }
+  });
+
+  test('editor toolbar and results are reachable, not silently clipped', async ({ page }) => {
+    await openWorkbench(page, true);
+    await page.getByRole('treeitem', { name: 'APP_Test' }).click();
+    await expect(page.getByLabel('APP_Test source editor')).toBeVisible();
+
+    for (const viewport of [{ width: 1024, height: 640 }, { width: 1440, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      await page.waitForTimeout(150);
+
+      const layout = await page.evaluate(() => {
+        const measure = (selector) => {
+          const element = document.querySelector(selector);
+          if (!element) return null;
+          const box = element.getBoundingClientRect();
+          return {
+            selector,
+            width: Math.round(box.width),
+            right: Math.round(box.right),
+            clipped: element.scrollWidth > element.clientWidth + 1,
+            overflowX: window.getComputedStyle(element).overflowX,
+          };
+        };
+        return {
+          innerWidth: window.innerWidth,
+          chat: Math.round(document.querySelector('.assistant-panel').getBoundingClientRect().width),
+          editor: Math.round(document.querySelector('.center-column').getBoundingClientRect().width),
+          chatLeft: Math.round(document.querySelector('.assistant-panel').getBoundingClientRect().left),
+          editorLeft: Math.round(document.querySelector('.center-column').getBoundingClientRect().left),
+          regions: [
+            '.editor-shell', '.editor-toolbar', '.expression-toolbar', '.object-context',
+            '.appian-rule-workspace', '.bottom-panel', '.bottom-tabs',
+          ].map(measure).filter(Boolean),
+        };
+      });
+
+      expect(layout.regions.length, 'editor regions must render').toBeGreaterThan(5);
+      for (const region of layout.regions) {
+        // Overflowing an ancestor that hides it is the defect: the content
+        // disappears with no scrollbar to reach it.
+        expect(
+          region.right,
+          `${region.selector} ends at ${region.right} past viewport ${layout.innerWidth} (${viewport.width}px)`,
+        ).toBeLessThanOrEqual(layout.innerWidth + 1);
+        if (region.clipped) {
+          expect(
+            ['auto', 'scroll'],
+            `${region.selector} overflows but is ${region.overflowX} (${viewport.width}px)`,
+          ).toContain(region.overflowX);
+        }
+      }
+
+      expect(layout.chat, `assistant column ${layout.chat}px (${viewport.width}px)`)
+        .toBeGreaterThanOrEqual(280);
+      expect(layout.editor, `editor column ${layout.editor}px (${viewport.width}px)`)
+        .toBeGreaterThanOrEqual(280);
+      expect(layout.editorLeft, 'editor must be to the right of the assistant')
+        .toBeGreaterThan(layout.chatLeft);
+
+      const clippedControls = await page.evaluate(async () => {
+        const editor = document.querySelector('.editor-shell');
+        const controls = [...editor.querySelectorAll('button, [role="tab"]')];
+        const failures = [];
+        for (const control of controls) {
+          control.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          const editorBox = editor.getBoundingClientRect();
+          const controlBox = control.getBoundingClientRect();
+          const rightLimit = Math.min(editorBox.right, window.innerWidth);
+          if (controlBox.left < editorBox.left - 1 || controlBox.right > rightLimit + 1) {
+            failures.push({
+              name: control.getAttribute('aria-label') || control.textContent.trim(),
+              left: Math.round(controlBox.left),
+              right: Math.round(controlBox.right),
+              editorLeft: Math.round(editorBox.left),
+              editorRight: Math.round(editorBox.right),
+              viewportRight: window.innerWidth,
+            });
+          }
+        }
+        return failures;
+      });
+      expect(
+        clippedControls,
+        `editor controls must fit or scroll fully into the editor at ${viewport.width}px`,
+      ).toEqual([]);
+    }
+  });
+
+  test('typed object controls call create, update, and delete routes', async ({ page }) => {
+    const calls = await openWorkbench(page, true);
+    await page.getByRole('treeitem', { name: 'APP_Test' }).click();
+    await page.getByRole('button', { name: 'Object operations' }).click();
+
+    await expect(page.getByRole('dialog', { name: 'Object operations' })).toBeVisible();
+    await expect(page.getByLabel('Object type', { exact: true })).toHaveValue('expression_rule');
+    await expect(page.getByLabel('Object ID')).toHaveValue(UUID);
+    await expect(page.getByText('Object operation', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Properties to change')).toBeVisible();
+
+    await page.getByLabel('Object name').fill('APP_NewRule');
+    await page.getByRole('button', { name: 'Preview create' }).click();
+    await page.getByRole('button', { name: 'Preview update' }).click();
+    await page.getByRole('button', { name: 'Preview delete' }).click();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(page.getByText('Delete APP_NewRule?')).toBeVisible();
+    await expect(page.getByText('This cannot be undone.')).toBeVisible();
+    expect(calls.filter((call) => call.method === 'DELETE')).toHaveLength(1);
+    await page.getByRole('button', { name: 'Confirm delete' }).click();
+
+    const typedCalls = calls.filter((call) => call.path.startsWith('/api/typed-objects/'));
+    expect(typedCalls.map((call) => call.method)).toEqual(['POST', 'PUT', 'DELETE', 'DELETE']);
+    expect(typedCalls[0].path).toBe('/api/typed-objects/expression_rule');
+    expect(typedCalls[1].path).toBe(`/api/typed-objects/expression_rule/${UUID}`);
+    expect(typedCalls[2].path).toBe(`/api/typed-objects/expression_rule/${UUID}`);
+    expect(typedCalls[3].path).toBe(`/api/typed-objects/expression_rule/${UUID}`);
+  });
+
+  test('object operations explain types without create examples', async ({ page }) => {
+    const gatedTypes = [
+      'business_process', 'process_report', 'robotic_task', 'robot_pool',
+      'control_panel', 'control_panel_hierarchy_item', 'dashboard', 'ai_agent',
+      'ai_skill', 'group_type', 'feed', 'event_consumer',
+    ];
+    await stubSidecar(page, {
+      loaded: true,
+      byType: Object.fromEntries(gatedTypes.map((type, index) => [type, [`gated-${index}`]])),
+      uuidToName: Object.fromEntries(gatedTypes.map((type, index) => [`gated-${index}`, type])),
+      objectTypeByUuid: Object.fromEntries(gatedTypes.map((type, index) => [`gated-${index}`, type])),
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('button', { name: 'Object operations' }).click();
+
+    const typePicker = page.getByLabel('Object type', { exact: true });
+    await expect(typePicker.locator('option', { hasText: '(create unavailable)' })).toHaveCount(12);
+    await typePicker.selectOption('ai_agent');
+    await expect(page.getByText(/Create unavailable: no example/)).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create', exact: true })).toBeDisabled();
   });
 
   test('model fields are pickers fed by the gateway, and degrade to text', async ({ page }) => {
@@ -633,7 +1053,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     ];
     await stubSidecar(page, { loaded: true, models });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await openTab(page, 'Settings');
+    await openSettings(page);
 
     const primary = page.getByLabel('Primary model');
     await expect(primary).toHaveRole('combobox');
@@ -651,7 +1071,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
       modelsError: 'HTTP 502 from gateway: upstream refused',
     });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await openTab(page, 'Settings');
+    await openSettings(page);
 
     await expect(page.getByLabel('Primary model')).toHaveRole('textbox');
     await expect(page.getByText('upstream refused')).toBeVisible();
@@ -667,7 +1087,7 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
       settingsTestError: 'HTTP 404 from https://gw/v1/chat/completions: route not found',
     });
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await openTab(page, 'Settings');
+    await openSettings(page);
     await expect(page.getByLabel('Primary model')).toHaveRole('combobox');
     // exact: the Build grid renders object names as buttons, and APP_Test
     // would otherwise match this substring.
@@ -755,6 +1175,27 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
     await grid.getByRole('button', { name: 'APP_Request' }).click();
     await expect(page.locator('.code-editor')).toContainText('record_type source for APP_Request');
   });
+
+  test('interface objects expose Appian design and expression modes', async ({ page }) => {
+    const interfaceUuid = 'uuid-interface-designer';
+    await stubSidecar(page, {
+      loaded: true,
+      byType: { interface: [interfaceUuid] },
+      uuidToName: { [interfaceUuid]: 'APP_RequestForm' },
+      objectTypeByUuid: { [interfaceUuid]: 'interface' },
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await page.getByRole('treeitem', { name: 'APP_RequestForm' }).click();
+
+    await expect(page.getByRole('tab', { name: 'Design' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByLabel('Component palette')).toBeVisible();
+    await expect(page.getByLabel('Interface live view')).toBeVisible();
+    await expect(page.getByLabel('Component configuration')).toBeVisible();
+    await expect(page.getByText('Preview requires an Appian runtime')).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Expression' }).click();
+    await expect(page.locator('.code-editor')).toBeVisible();
+  });
 });
 
 // These components were each proved in isolation while they were built. They
@@ -762,16 +1203,29 @@ test.describe('loaded codebase API contracts and rendered checks', () => {
 // defect showed that a component passing against a stub proves nothing about
 // the app the user runs.
 test.describe('Appian Designer surfaces in the assembled workbench', () => {
-  test('the application navigation offers Appian views and admits what is missing', async ({ page }) => {
+  test('the unimplemented application rail and workflow tab are removed', async ({ page }) => {
     await openWorkbench(page, true);
-    const nav = page.getByRole('navigation', { name: 'Application' });
+    await expect(page.getByRole('navigation', { name: 'Application' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Progress' })).toHaveCount(0);
+  });
 
-    for (const label of ['Plan', 'Explore', 'Build', 'Packages', 'Deploy', 'Monitor']) {
-      await expect(nav.getByRole('button', { name: label })).toBeVisible();
-    }
-    await expect(nav.getByRole('button', { name: 'Build' })).toHaveAttribute('aria-current', 'page');
-    // Unbuilt views must be disabled rather than hidden or silently inert.
-    await expect(nav.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+  test('expression rules use the Appian source, tests, and rule-input layout', async ({ page }) => {
+    await openWorkbench(page, true);
+    await page.getByRole('treeitem', { name: 'APP_Test' }).click();
+
+    await expect(page.getByRole('region', { name: 'Rule source' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Rule tests' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Rule inputs' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Test Cases (1)' })).toBeVisible();
+    await expect(page.getByText('Positive total')).toBeVisible();
+    await expect(page.getByText('Output equals 10')).toBeVisible();
+    await expect(page.getByText('Integer')).toBeVisible();
+
+    const sourcePane = page.getByRole('region', { name: 'Rule source' });
+    const before = await sourcePane.evaluate((element) => element.getBoundingClientRect().width);
+    await page.getByRole('separator', { name: 'Resize rule source' }).press('ArrowRight');
+    const after = await sourcePane.evaluate((element) => element.getBoundingClientRect().width);
+    expect(after).toBeGreaterThan(before);
   });
 
   test('problems use Appian severities and suppress guidance behind syntax errors', async ({ page }) => {

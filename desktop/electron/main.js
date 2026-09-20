@@ -474,7 +474,14 @@ function createWindow(uiUrl) {
   applyDownloadPolicy(win);
   win.once('ready-to-show', () => {
     closeSplash();
-    if (!win.isDestroyed()) win.show();
+    if (!win.isDestroyed()) {
+      win.maximize();
+      win.show();
+      // Windows can drop a maximize requested while the window is hidden.
+      setImmediate(() => {
+        if (!win.isDestroyed() && !win.isMaximized()) win.maximize();
+      });
+    }
   });
   win.webContents.on('did-fail-load', closeSplash);
   win.on('close', shutdown);

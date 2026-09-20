@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import inspect
+import json
 import logging
 import re
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
+from types import ModuleType
+from typing import Any, AsyncIterator, Awaitable, Callable, Protocol, TypeVar
 
 from pydantic import ValidationError
 
@@ -53,6 +59,135 @@ T = TypeVar("T")
 # carries no structured criteria.
 _AC_ID_PATTERN = re.compile(r"\bAC[-_ ]?(\d{1,3})\b", re.IGNORECASE)
 
+# Hard ceiling on model/tool round trips for one free-form chat turn.  A budget
+# lives here rather than in settings so a misconfigured session cannot loop.
+MAX_CHAT_TOOL_ROUNDS = 8
+
+_CHAT_TOOL_MODULE = "appian_sentinel.mcp_server.openai_tools"
+# The one read-only tool that loads any selected object by UUID, whatever its
+# type. Reporting it is honest because it is the call that actually runs.
+_SELECTED_OBJECT_TOOL = "get_object"
+_RESULT_SUMMARY_LIMIT = 240
+_ARG_VALUE_LIMIT = 200
+_NO_WORKSPACE_ERROR = "No Appian workspace is loaded; import an export ZIP first."
+_OK_TOOL_STATUSES = frozenset({"", "ok", "success", "succeeded"})
+
+
+class ChatToolCall(Protocol):
+    """One tool call selected by the model."""
+
+    id: str
+    name: str
+    arguments: Any
+
+
+class ChatToolResponse(Protocol):
+    """One assistant turn that may carry tool calls."""
+
+    content: str | None
+    tool_calls: Sequence[ChatToolCall]
+    finish_reason: str | None
+
+
+def _utc_now() -> str:
+    """Return the current UTC instant as an ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ascii_clip(text: str, limit: int) -> str:
+    """Collapse to single-line ASCII and cap the length."""
+    plain = " ".join(text.encode("ascii", "replace").decode("ascii").split())
+    if len(plain) <= limit:
+        return plain
+    return plain[: limit - 3] + "..."
+
+
+def _as_text(value: Any) -> str:
+    """Render one argument value as text without double-quoting strings."""
+    return value if isinstance(value, str) else json.dumps(value, default=str)
+
+
+def _masked_arguments(arguments: dict[str, Any]) -> dict[str, str]:
+    """Return tool arguments with secrets redacted and values bounded."""
+    return {
+        str(key): _ascii_clip(mask_secrets(_as_text(value)), _ARG_VALUE_LIMIT)
+        for key, value in arguments.items()
+    }
+
+
+def _normalise_arguments(raw: Any) -> dict[str, Any]:
+    """Coerce model-supplied arguments into a mapping.
+
+    Raises ``ValueError`` when the model sent something that is not a JSON
+    object, so the caller can report a failed call instead of crashing.
+    """
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, str):
+        text = raw.strip() or "{}"
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"tool arguments are not valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError("tool arguments must be a JSON object")
+        return parsed
+    raise ValueError(f"tool arguments must be a JSON object, got {type(raw).__name__}")
+
+
+def _collect_uuids(source: Any) -> list[str]:
+    """Collect object UUIDs from nested tool arguments and results."""
+    uuids: list[str] = []
+    if isinstance(source, dict):
+        for key, value in source.items():
+            if "uuid" in str(key).lower():
+                items = value if isinstance(value, list) else [value]
+                uuids.extend(
+                    str(item) for item in items if isinstance(item, str) and item
+                )
+            uuids.extend(_collect_uuids(value))
+    elif isinstance(source, list):
+        for item in source:
+            uuids.extend(_collect_uuids(item))
+    return uuids
+
+
+def _merge_uuids(*groups: Sequence[str]) -> list[str]:
+    """Merge UUID groups, keeping first-seen order and dropping duplicates."""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for group in groups:
+        for uuid in group:
+            if uuid and uuid not in seen:
+                seen.add(uuid)
+                merged.append(uuid)
+    return merged
+
+
+def _result_summary(payload: dict[str, Any]) -> str:
+    """Summarise a tool result for the UI within the metadata budget."""
+    return _ascii_clip(mask_secrets(json.dumps(payload, default=str)), _RESULT_SUMMARY_LIMIT)
+
+
+def _loaded_object_identity(payload: dict[str, Any]) -> dict[str, str]:
+    """Return the identity a tool result proves it loaded, else nothing.
+
+    The read tool reports a missing object in its payload rather than raising,
+    so an identity is claimed only when the result carries one.
+    """
+    detail = payload.get("result")
+    if not isinstance(detail, dict):
+        detail = payload
+    if detail.get("error"):
+        return {}
+    uuid = str(detail.get("uuid") or "")
+    name = str(detail.get("name") or "")
+    if not uuid or not name:
+        return {}
+    return {"uuid": uuid, "name": name, "type": str(detail.get("object_type") or "")}
+
 
 class Orchestrator:
     """Drives the 9-step Sentinel workflow with an agentic fix loop.
@@ -70,6 +205,12 @@ class Orchestrator:
     ) -> None:
         self.state = state
         self._on_message = on_message
+
+        # Chat delivery bookkeeping. It lives on the session-scoped
+        # orchestrator, not on the connection, so a replacement socket can see
+        # what the dropped one failed to deliver.
+        self.delivered_message_id: str = ""
+        self.stream_interrupted: bool = False
 
         # Will be populated when the user uploads the Appian export ZIP.
         self._export_dir: Path | None = None
@@ -137,7 +278,7 @@ class Orchestrator:
             )
 
             # --- Extract the user story ------------------------------------
-            story = None
+            story = self.state.user_story
             if story_path:
                 self.state.story_path = str(story_path)
                 await self._emit_status("Extracting user story from PDF ...")
@@ -171,7 +312,8 @@ class Orchestrator:
             if story is None:
                 # Pause and wait for the user to provide a story.
                 await self._ask_user(
-                    "Please provide a user story (paste text, upload a PDF, or type your requirements)."
+                    "Please provide requirements in chat, attach files, or load an "
+                    "Azure DevOps work item."
                 )
                 # After resume, `state.user_story` should be populated by
                 # `process_user_message`.
@@ -225,7 +367,11 @@ class Orchestrator:
             )
             return self.state
 
-    async def process_user_message(self, message: str) -> AsyncIterator[ChatMessage]:
+    async def process_user_message(
+        self,
+        message: str,
+        object_uuids: list[str] | None = None,
+    ) -> AsyncIterator[ChatMessage]:
         """Handle an incoming user message and yield response messages.
 
         This is the primary interface for the WebSocket handler.  It covers:
@@ -233,8 +379,24 @@ class Orchestrator:
         * Answering clarifying questions.
         * Free-form chat while idle.
         """
-        user_msg = self.state.add_user_message(message)
+        selected = [uuid for uuid in (object_uuids or []) if uuid]
+        user_msg = self.state.add_message(
+            "user",
+            message,
+            metadata={"object_uuids": selected} if selected else None,
+        )
         yield user_msg
+
+        # The requirement workflow keeps its object listing; free-form chat
+        # reports only the tool calls the model actually makes.
+        answering_questions = self.state.has_unanswered_questions()
+        providing_story = (
+            self.state.status in (AgentStatus.IDLE, AgentStatus.WAITING_FOR_USER)
+            and self.state.user_story is None
+        )
+        if answering_questions or providing_story:
+            async for item in self._emit_object_tool_trace(selected):
+                yield item
 
         # --- Answer pending questions ------------------------------------
         if self.state.has_unanswered_questions():
@@ -287,45 +449,245 @@ class Orchestrator:
                 yield err
             return
 
-        # --- Free-form LLM chat (idle or during workflow) -----------------
-        model = settings.sentinel_fast_model
-        await self.emit_progress(
-            phase="llm.chat",
-            current=0,
-            total=1,
-            detail=f"LLM call started: model {model}.",
-        )
+        # --- Free-form LLM chat with real tool calls ----------------------
+        async for item in self._run_chat_tool_loop(selected):
+            yield item
+
+    # ------------------------------------------------------------------
+    # Bounded chatbot tool loop
+    # ------------------------------------------------------------------
+
+    async def _run_chat_tool_loop(
+        self,
+        selected: list[str],
+    ) -> AsyncIterator[ChatMessage]:
+        """Let the model drive tools for one chat turn, within a fixed budget.
+
+        Every emitted ``MessageType.TOOL`` pair corresponds to a call the model
+        asked for.  Objects the user selected enter the model context as text;
+        loading them is the model's decision, so no call is reported for them.
+        """
         try:
-            response_text = await llm_client.llm.chat(
-                [
-                    {"role": m.role, "content": m.content}
-                    for m in self.state.messages[-20:]
-                ],
-                model=model,
-                max_tokens=2048,
-            )
-            await self.emit_progress(
-                phase="llm.chat",
-                current=1,
-                total=1,
-                detail=f"LLM call completed: model {model}.",
-                result="ok",
-            )
-            reply = self.state.add_assistant_message(response_text)
-            yield reply
+            adapter = importlib.import_module(_CHAT_TOOL_MODULE)
+            listed_tools = adapter.list_chat_tools()
+            if inspect.isawaitable(listed_tools):
+                listed_tools = await listed_tools
+            tools = list(listed_tools)
         except Exception as exc:
-            await self.emit_progress(
-                phase="llm.chat",
-                current=1,
-                total=1,
-                detail=f"LLM call failed: model {model}: {exc}",
-                result="failed",
-            )
-            err = self.state.add_assistant_message(
-                f"LLM error: {exc}",
+            yield self.state.add_assistant_message(
+                f"Chat tools are unavailable: {mask_secrets(str(exc))}",
                 message_type=MessageType.ERROR,
             )
-            yield err
+            return
+
+        model = settings.sentinel_fast_model
+        export_dir = self._chat_export_dir()
+        conversation = self._chat_history_messages()
+        if selected:
+            conversation.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Objects the user selected for this turn (UUIDs): "
+                        + ", ".join(selected)
+                        + ". Their content is not loaded yet; call a tool to read any you need."
+                    ),
+                }
+            )
+
+        for round_number in range(1, MAX_CHAT_TOOL_ROUNDS + 1):
+            phase = f"llm.chat_round_{round_number}"
+            await self.emit_progress(
+                phase=phase,
+                current=0,
+                total=1,
+                detail=f"Analysis started: model {model}.",
+            )
+            try:
+                response = await llm_client.llm.chat_with_tools(
+                    conversation,
+                    tools,
+                    tool_choice="auto",
+                    model=model,
+                )
+            except Exception as exc:
+                await self.emit_progress(
+                    phase=phase,
+                    current=1,
+                    total=1,
+                    detail=f"Analysis failed: model {model}: {exc}",
+                    result="failed",
+                )
+                yield self.state.add_assistant_message(
+                    f"Assistant error: {mask_secrets(str(exc))}",
+                    message_type=MessageType.ERROR,
+                )
+                return
+            await self.emit_progress(
+                phase=phase,
+                current=1,
+                total=1,
+                detail=f"Analysis completed: model {model}.",
+                result="ok",
+            )
+
+            calls = list(getattr(response, "tool_calls", None) or [])
+            if not calls:
+                yield self.state.add_assistant_message(response.content or "")
+                return
+
+            conversation.append(self._assistant_call_message(response, calls))
+            for call in calls:
+                async for message in self._run_one_chat_tool(
+                    adapter, call, export_dir, conversation
+                ):
+                    yield message
+
+        yield self.state.add_assistant_message(
+            f"Stopped after {MAX_CHAT_TOOL_ROUNDS} tool rounds without a final answer. "
+            "Narrow the request and send it again.",
+            message_type=MessageType.ERROR,
+        )
+
+    async def _run_one_chat_tool(
+        self,
+        adapter: ModuleType,
+        call: ChatToolCall,
+        export_dir: Path | None,
+        conversation: list[dict[str, Any]],
+    ) -> AsyncIterator[ChatMessage]:
+        """Emit the start/end pair for one call and feed its result back."""
+        call_id = str(getattr(call, "id", "") or "")
+        name = str(getattr(call, "name", "") or "")
+        started_at = _utc_now()
+        argument_error = ""
+        try:
+            arguments = _normalise_arguments(getattr(call, "arguments", None))
+        except ValueError as exc:
+            arguments = {}
+            argument_error = str(exc)
+        argument_uuids = _collect_uuids(arguments)
+
+        yield self.state.add_assistant_message(
+            f"Tool {name or 'unknown'} started.",
+            message_type=MessageType.TOOL,
+            metadata={
+                "call_id": call_id,
+                "tool": name,
+                "status": "started",
+                "args": _masked_arguments(arguments),
+                "started_at": started_at,
+                "ended_at": None,
+                "object_uuids": argument_uuids,
+                "result_summary": "",
+            },
+        )
+
+        status, payload = await self._invoke_chat_tool(
+            adapter, name, arguments, export_dir, argument_error
+        )
+        ended_at = _utc_now()
+        summary = _result_summary(payload)
+        yield self.state.add_assistant_message(
+            f"Tool {name or 'unknown'} {status}: {summary}",
+            message_type=MessageType.TOOL,
+            metadata={
+                "call_id": call_id,
+                "tool": name,
+                "status": status,
+                "args": _masked_arguments(arguments),
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "object_uuids": _merge_uuids(argument_uuids, _collect_uuids(payload)),
+                "result_summary": summary,
+                "result": payload,
+            },
+        )
+        conversation.append(
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": name,
+                "content": json.dumps(payload, default=str),
+            }
+        )
+
+    async def _invoke_chat_tool(
+        self,
+        adapter: ModuleType,
+        name: str,
+        arguments: dict[str, Any],
+        export_dir: Path | None,
+        argument_error: str,
+    ) -> tuple[str, dict[str, Any]]:
+        """Run one tool and classify its outcome as ok, failed, or blocked."""
+        if argument_error:
+            return "failed", {
+                "status": "failed",
+                "error": _ascii_clip(argument_error, _RESULT_SUMMARY_LIMIT),
+            }
+        if export_dir is None:
+            return "blocked", {"status": "blocked", "error": _NO_WORKSPACE_ERROR}
+        try:
+            # ponytail: a synchronous adapter runs on the loop thread; wrap in
+            # asyncio.to_thread if a tool ever becomes slow enough to matter.
+            result = adapter.invoke_chat_tool(name, arguments, str(export_dir))
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as exc:
+            return "failed", {
+                "status": "failed",
+                "error": _ascii_clip(
+                    mask_secrets(f"{type(exc).__name__}: {exc}"), _RESULT_SUMMARY_LIMIT
+                ),
+            }
+        payload = result if isinstance(result, dict) else {"result": result}
+        if payload.get("ok") is False:
+            return "failed", payload
+        inner = payload.get("result")
+        if isinstance(inner, dict) and inner.get("status") == "pending_deletion":
+            return "pending_confirmation", payload
+        reported = str(payload.get("status", "")).strip().lower()
+        status = "ok" if reported in _OK_TOOL_STATUSES else "failed"
+        return status, payload
+
+    def _chat_export_dir(self) -> Path | None:
+        """Return the loaded workspace directory, if the session has one."""
+        if self._export_dir is not None:
+            return self._export_dir
+        if self.state.export_dir:
+            return Path(self.state.export_dir)
+        return None
+
+    def _chat_history_messages(self) -> list[dict[str, Any]]:
+        """Return the recent conversation the model sees for a chat turn."""
+        return [
+            {"role": message.role, "content": message.content}
+            for message in self.state.messages[-20:]
+            if message.message_type not in (MessageType.STATUS, MessageType.TOOL)
+        ]
+
+    @staticmethod
+    def _assistant_call_message(
+        response: ChatToolResponse,
+        calls: Sequence[ChatToolCall],
+    ) -> dict[str, Any]:
+        """Render the assistant turn that requested tools, for the next round."""
+        return {
+            "role": "assistant",
+            "content": response.content or "",
+            "tool_calls": [
+                {
+                    "id": str(getattr(call, "id", "") or ""),
+                    "type": "function",
+                    "function": {
+                        "name": str(getattr(call, "name", "") or ""),
+                        "arguments": _as_text(getattr(call, "arguments", None) or {}),
+                    },
+                }
+                for call in calls
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Workflow steps
@@ -1335,6 +1697,71 @@ class Orchestrator:
 
         logger.warning("Could not parse generated objects from LLM output.")
         return []
+
+    async def _emit_object_tool_trace(
+        self,
+        object_uuids: list[str],
+    ) -> AsyncIterator[ChatMessage]:
+        """Read every selected object through the adapter and report the truth.
+
+        Each reported call was attempted for real and carries the status the
+        adapter returned, so a failed or blocked read is never shown as a
+        loaded object.
+        """
+        if not object_uuids:
+            return
+        try:
+            adapter = importlib.import_module(_CHAT_TOOL_MODULE)
+        except Exception as exc:
+            yield self.state.add_assistant_message(
+                f"Object tools are unavailable: {mask_secrets(str(exc))}",
+                message_type=MessageType.ERROR,
+            )
+            return
+
+        export_dir = self._chat_export_dir()
+        involved: list[dict[str, str]] = []
+        tool_calls: list[dict[str, str]] = []
+        for uuid in object_uuids:
+            status, payload = await self._invoke_chat_tool(
+                adapter,
+                _SELECTED_OBJECT_TOOL,
+                {"uuid": uuid},
+                export_dir,
+                "",
+            )
+            identity = _loaded_object_identity(payload)
+            if status == "ok" and not identity:
+                status = "failed"
+            entry = {
+                "tool": _SELECTED_OBJECT_TOOL,
+                "status": status,
+                "object_uuid": uuid,
+            }
+            if identity:
+                involved.append(identity)
+                entry["object_name"] = identity["name"]
+                entry["object_type"] = identity["type"]
+            else:
+                entry["detail"] = _result_summary(payload)
+            tool_calls.append(entry)
+
+        loaded = ", ".join(item["name"] for item in involved) or "none"
+        content = f"Objects loaded for this turn: {loaded}."
+        unread = [
+            entry["object_uuid"] for entry in tool_calls if entry["status"] != "ok"
+        ]
+        if unread:
+            content += f" Could not read: {', '.join(unread)}."
+        yield self.state.add_assistant_message(
+            content,
+            message_type=MessageType.TOOL,
+            metadata={
+                "objects": involved,
+                "object_uuids": [item["uuid"] for item in involved],
+                "tool_calls": tool_calls,
+            },
+        )
 
     async def _emit_assistant(
         self,

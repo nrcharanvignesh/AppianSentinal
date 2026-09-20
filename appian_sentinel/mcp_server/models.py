@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from appian_sentinel.models.appian_objects import ObjectType
-from appian_sentinel.models.test_case import TestSuite
+from appian_sentinel.models.test_case import AppianAssertionType, TestSuite
 from appian_sentinel.models.user_story import SolutionDesign, UserStory
 
 
@@ -51,6 +51,23 @@ class ResolveObjectResponse(StrictModel):
     status: Literal["resolved", "ambiguous", "not_found"]
     object: ObjectSummary | None = None
     candidates: list[ObjectSummary] = Field(default_factory=list)
+
+
+class GetCodebaseRequest(StrictModel):
+    export_dir: str
+
+
+class GetCodebaseResponse(StrictModel):
+    app_name: str = ""
+    app_uuid: str = ""
+    app_prefix: str = ""
+    appian_version: str = ""
+    export_timestamp: str = ""
+    by_type: dict[str, list[str]] = Field(default_factory=dict)
+    uuid_to_name: dict[str, str] = Field(default_factory=dict)
+    descriptions: dict[str, str] = Field(default_factory=dict)
+    reverse_dependencies: dict[str, list[str]] = Field(default_factory=dict)
+    parent_by_uuid: dict[str, str] = Field(default_factory=dict)
 
 
 class DependencyDirection(str, Enum):
@@ -103,7 +120,7 @@ class InspectSailRequest(SailSourceRequest):
 class SailDiagnostic(StrictModel):
     source: Literal["analyzer"]
     code: str
-    severity: Literal["error", "warning"]
+    severity: Literal["error", "warning", "recommendation"]
     line: int = 0
     column: int = 0
     end_line: int = 0
@@ -192,6 +209,73 @@ class StaticTestResult(StrictModel):
     skipped: int = 0
     execution_mode: Literal["static"] = "static"
     results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class GetObjectTestsRequest(StrictModel):
+    export_dir: str
+    object_uuid: str = Field(min_length=1, max_length=500)
+
+
+class EmbeddedTestCase(StrictModel):
+    name: str = ""
+    description: str = ""
+    inputs: dict[str, str] = Field(default_factory=dict)
+    assertion_type: AppianAssertionType = AppianAssertionType.COMPLETES_WITHOUT_ERROR
+    expected: str = ""
+    assertion_expression: str = ""
+    xml: str = ""
+
+
+class GetObjectTestsResponse(StrictModel):
+    object_uuid: str
+    tests: list[EmbeddedTestCase] = Field(default_factory=list)
+
+
+class RunObjectStaticTestRequest(StrictModel):
+    export_dir: str
+    object_uuid: str = Field(min_length=1, max_length=500)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunObjectStaticTestResponse(StrictModel):
+    object_uuid: str
+    evaluated: Literal[False] = False
+    is_valid: bool
+    note: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    diagnostics: list[SailDiagnostic] = Field(default_factory=list)
+
+
+class StructuredObjectTest(StrictModel):
+    name: str = Field(min_length=1, max_length=500)
+    description: str = Field(default="", max_length=10_000)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    assertion_type: AppianAssertionType = AppianAssertionType.OUTPUT_EQUALS
+    expected: Any = None
+    assertion_expression: str = Field(default="", max_length=1_000_000)
+
+    @model_validator(mode="after")
+    def validate_assertion(self) -> StructuredObjectTest:
+        if self.assertion_type is AppianAssertionType.EXPRESSION:
+            if not self.assertion_expression.strip():
+                raise ValueError("Expression assertions require assertion_expression.")
+            if "test!output" not in self.assertion_expression.casefold():
+                raise ValueError("Expression assertions must reference test!output.")
+        elif self.assertion_expression.strip():
+            raise ValueError("assertion_expression requires assertion_type='expression'.")
+        if (
+            self.assertion_type is AppianAssertionType.COMPLETES_WITHOUT_ERROR
+            and self.expected is not None
+        ):
+            raise ValueError("No-error assertions cannot define expected.")
+        return self
+
+
+class BulkReplaceTestsRequest(StrictModel):
+    export_dir: str
+    object_uuids: list[str] = Field(min_length=1, max_length=500)
+    tests: list[StructuredObjectTest] = Field(min_length=1, max_length=500)
+    preview: bool = True
 
 
 class GenerateFullZipRequest(StrictModel):
@@ -305,3 +389,83 @@ class BulkAddTestsResponse(StrictModel):
     object_uuids: list[str] = Field(default_factory=list)
     test_count: int
     file_paths: list[str] = Field(default_factory=list)
+
+
+class TypedObjectRequest(StrictModel):
+    export_dir: str = Field(description="Path to the extracted Appian export.")
+    object_uuid: str = Field(
+        min_length=1,
+        max_length=500,
+        description="UUID of the object to return.",
+    )
+
+
+class CreateTypedObjectRequest(StrictModel):
+    export_dir: str = Field(description="Path to the extracted Appian export.")
+    name: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Name for the new object.",
+    )
+    template_uuid: str = Field(
+        default="",
+        description=(
+            "UUID of a same-type object to clone. Required only when the type "
+            "has no native writer."
+        ),
+    )
+    fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Type-specific object fields. Omit fields that should use defaults.",
+    )
+    preview: bool = Field(
+        default=False,
+        description="When true, validate and describe the create without writing files.",
+    )
+
+
+class UpdateTypedObjectRequest(StrictModel):
+    export_dir: str = Field(description="Path to the extracted Appian export.")
+    object_uuid: str = Field(
+        min_length=1,
+        max_length=500,
+        description="UUID of the object to update.",
+    )
+    fields: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Fields to replace. Use name to rename the object.",
+    )
+    preview: bool = Field(
+        default=False,
+        description="When true, validate and describe the update without writing files.",
+    )
+
+
+class DeleteTypedObjectRequest(StrictModel):
+    export_dir: str = Field(description="Path to the extracted Appian export.")
+    object_uuid: str = Field(
+        min_length=1,
+        max_length=500,
+        description="UUID of the object to delete.",
+    )
+    force: bool = Field(
+        default=False,
+        description="When true, allow deletion despite reverse dependencies or children.",
+    )
+    preview: bool = Field(
+        default=True,
+        description="When true, report the delete without changing files.",
+    )
+
+
+class MutationResponse(StrictModel):
+    status: str
+    uuid: str = ""
+    name: str = ""
+    file_path: str = ""
+    reason: str = ""
+    template_uuid: str = ""
+    dependents: list[str] = Field(default_factory=list)
+    children: list[str] = Field(default_factory=list)
+    forced: bool = False
+    object: dict[str, Any] | None = None

@@ -44,7 +44,8 @@ def test_ado_client_error_is_redacted_from_logs(
     monkeypatch.setattr(settings, "ado_project", "project")
     monkeypatch.setattr(settings, "ado_source", "pat")
     monkeypatch.setattr(
-        "appian_sentinel.web.routes.ado_client.get_work_item",
+        routes.mcp_tools,
+        "read_ado_work_item",
         AsyncMock(side_effect=RuntimeError(f"Authorization: Basic {FAKE_KEY}")),
     )
     routes._sessions.clear()
