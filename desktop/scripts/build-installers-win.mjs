@@ -70,7 +70,7 @@ async function fileSha256(filePath) {
   return hash.digest('hex');
 }
 
-function wrapperHeader(bytes, sha256, asarSha256) {
+function wrapperHeader(bytes, sha256, asarSha256, engineSha256) {
   return `@echo off
 setlocal
 title Appian Sentinel Install
@@ -98,6 +98,7 @@ $ProgressPreference = 'SilentlyContinue'
 $ExpectedBytes = ${bytes}
 $ExpectedSha256 = '${sha256}'
 $ExpectedAsarSha256 = '${asarSha256}'
+$ExpectedEngineSha256 = '${engineSha256}'
 $Self = $env:_SENTINEL_SELF
 $Setup = Join-Path $env:SENTINEL_SCRATCH 'AppianSentinel-Setup.exe'
 $Bundle = ':' + 'BUNDLE'
@@ -129,14 +130,22 @@ if ($process.ExitCode -ne 0) { throw "NSIS exited $($process.ExitCode)" }
 # NSIS reports success even when a running app locks app.asar and the copy is
 # skipped, which silently leaves the previous build installed.
 $installedAsar = Join-Path $env:SENTINEL_INSTALL_DIR 'resources\app.asar'
+$installedEngine = Join-Path $env:SENTINEL_INSTALL_DIR 'resources\sidecar\appian-sentinel-sidecar.exe'
 # NSIS can return before the last copy is visible to Test-Path.
-$deadline = [datetime]::UtcNow.AddSeconds(30)
-while (-not (Test-Path -LiteralPath $installedAsar) -and [datetime]::UtcNow -lt $deadline) {
+$deadline = [datetime]::UtcNow.AddSeconds(900)
+while (
+  (-not (Test-Path -LiteralPath $installedAsar) -or
+   -not (Test-Path -LiteralPath $installedEngine)) -and
+  [datetime]::UtcNow -lt $deadline
+) {
   Start-Sleep -Milliseconds 500
 }
 if (-not (Test-Path -LiteralPath $installedAsar)) { throw 'installed app.asar is missing' }
+if (-not (Test-Path -LiteralPath $installedEngine)) { throw 'installed engine is missing' }
 $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedAsar).Hash.ToLowerInvariant()
 if ($installedHash -ne $ExpectedAsarSha256) { throw 'installed app.asar does not match this build; close Appian Sentinel and install again' }
+$installedEngineHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedEngine).Hash.ToLowerInvariant()
+if ($installedEngineHash -ne $ExpectedEngineSha256) { throw 'installed engine does not match this build; close Appian Sentinel and install again' }
 Write-Host '[SUCCESS] Appian Sentinel installed'
 :BUNDLE
 `;
@@ -157,15 +166,18 @@ async function appendBase64Payload(outputPath, inputPath) {
 
 let workRoot = REPO_ROOT;
 try {
-  if (USE_SHORT_ROOT) {
+  const wrapOnly = process.argv.includes('--wrap-only');
+  if (USE_SHORT_ROOT && !wrapOnly) {
     console.log(`[INFO] mirroring long path to ${SHORT_ROOT}`);
     workRoot = mirrorToShortPath();
   }
 
-  const python = process.env.PYTHON || 'python';
-  run(python, ['-m', 'PyInstaller', 'sidecar.spec', '--noconfirm'], workRoot);
-  run(python, ['desktop/scripts/make-icon.py'], workRoot);
-  run('npm', ['run', 'build:desktop'], join(workRoot, 'desktop'));
+  if (!wrapOnly) {
+    const python = process.env.PYTHON || 'python';
+    run(python, ['-m', 'PyInstaller', 'sidecar.spec', '--noconfirm'], workRoot);
+    run(python, ['desktop/scripts/make-icon.py'], workRoot);
+    run('npm', ['run', 'build:desktop'], join(workRoot, 'desktop'));
+  }
 
   const releaseDir = join(workRoot, 'desktop', 'release', 'desktop');
   const setupNames = readdirSync(releaseDir).filter((name) => {
@@ -194,7 +206,20 @@ try {
   const builtAsar = join(releaseDir, 'win-unpacked', 'resources', 'app.asar');
   if (!existsSync(builtAsar)) throw new Error(`packed app.asar is missing under ${builtAsar}`);
   const asarSha256 = await fileSha256(builtAsar);
-  writeFileSync(output, wrapperHeader(bytes, sha256, asarSha256), 'ascii');
+  const builtEngine = join(
+    releaseDir,
+    'win-unpacked',
+    'resources',
+    'sidecar',
+    'appian-sentinel-sidecar.exe',
+  );
+  if (!existsSync(builtEngine)) throw new Error(`packed engine is missing under ${builtEngine}`);
+  const engineSha256 = await fileSha256(builtEngine);
+  writeFileSync(
+    output,
+    wrapperHeader(bytes, sha256, asarSha256, engineSha256),
+    'ascii',
+  );
   await appendBase64Payload(output, stableSetup);
   console.log(`[SUCCESS] delivery artifact written to ${output}`);
 } finally {

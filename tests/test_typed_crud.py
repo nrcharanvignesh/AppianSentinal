@@ -108,6 +108,8 @@ def test_template_create_commits_parseable_export_log(export_dir: Path) -> None:
         fields={"definition": "1"},
     )
     uuid = created["uuid"]
+    assert created["source"] == "native_writer"
+    assert created["template_uuid"] == ""
     log = parse_export_log(export_dir / "META-INF" / "export.log")
     assert log[uuid] == "APP_Created"
     history = WorkspaceHistoryService(export_dir)
@@ -158,20 +160,49 @@ def test_template_create_rolls_back_object_and_metadata(
     assert (export_dir / "application" / "app.xml").read_bytes() == before_application
 
 
-def test_create_requires_same_type_template(export_dir: Path) -> None:
+def test_unproven_create_requires_same_type_template(export_dir: Path) -> None:
     with pytest.raises(MutationError) as template_error:
         create_typed_object(export_dir, ObjectType.AI_AGENT, name="APP_AI")
     assert template_error.value.reason == "template_required"
     assert template_error.value.details["requirement"] == "real_export_template"
 
+    with pytest.raises(MutationError) as event_error:
+        create_typed_object(
+            export_dir,
+            ObjectType.EVENT_CONSUMER,
+            name="APP_Event",
+        )
+    assert event_error.value.reason == "template_required"
+    assert event_error.value.details["requirement"] == "real_export_template"
+
+
+def test_native_create_without_same_type_template(export_dir: Path) -> None:
+    (export_dir / "site" / f"{SITE_UUID}.xml").unlink()
+    cache.get_codebase(export_dir, rebuild=True)
+
+    created = create_typed_object(
+        export_dir,
+        ObjectType.SITE,
+        name="APP_NativeSite",
+    )
+
+    assert created["source"] == "native_writer"
+    assert created["template_uuid"] == ""
+    assert Path(created["file_path"]).exists()
+    assert get_typed_object(
+        export_dir, ObjectType.SITE, created["uuid"]
+    )["name"] == "APP_NativeSite"
+
+
+def test_native_create_reports_missing_required_fields(export_dir: Path) -> None:
     with pytest.raises(MutationError) as process_error:
         create_typed_object(
             export_dir,
             ObjectType.PROCESS_MODEL,
             name="APP_Process",
         )
-    assert process_error.value.reason == "template_required"
-    assert process_error.value.details["requirement"] == "real_export_template"
+    assert process_error.value.reason == "invalid_fields"
+    assert "folder_uuid" in process_error.value.details["message"]
 
 
 def test_create_clones_same_type_template(export_dir: Path) -> None:

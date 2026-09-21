@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from lxml import etree
 
+from appian_sentinel.generator.object_writer import build_native_object_artifacts
 from appian_sentinel.mcp_server import cache
 from appian_sentinel.models.appian_objects import ObjectType
 from appian_sentinel.models.object_registry import CAPABILITY_BY_TYPE, ObjectCapability
@@ -61,8 +62,12 @@ def create_typed_object(
     fields: dict[str, Any] | None = None,
     preview: bool = False,
 ) -> dict[str, Any]:
-    _capability(object_type)
+    capability = _capability(object_type)
     fields = dict(fields or {})
+    if not template_uuid and capability.native_write:
+        return _create_native_object(
+            export_dir, object_type, name=name, fields=fields, preview=preview
+        )
     template = _template_object(export_dir, object_type, template_uuid)
     if template is None:
         raise MutationError(
@@ -284,6 +289,81 @@ def _type_matches(actual: ObjectType, expected: ObjectType) -> bool:
         ObjectType.RULES_FOLDER: {ObjectType.RULES_FOLDER},
     }
     return actual in aliases.get(expected, set())
+
+
+def _create_native_object(
+    export_dir: Path,
+    object_type: ObjectType,
+    *,
+    name: str,
+    fields: dict[str, Any],
+    preview: bool,
+) -> dict[str, Any]:
+    """Create an object from its native writer, with no same-type template present."""
+    fields = dict(fields)
+    requested_uuid = str(fields.pop("uuid", "")).strip()
+    if object_type is ObjectType.DATA_TYPE:
+        namespace = str(fields.get("namespace", "")).strip()
+        if not namespace:
+            raise MutationError(
+                "namespace_required",
+                object_type=object_type.value,
+                message="Data Type creation without a template needs a namespace",
+            )
+        if not name or any(character.isspace() for character in name):
+            raise MutationError(
+                "invalid_name",
+                object_type=object_type.value,
+                message="Data Type names must be one non-empty token",
+            )
+        new_uuid = requested_uuid or f"{{{namespace}}}{name}"
+    else:
+        new_uuid = requested_uuid or str(uuid.uuid4())
+
+    if preview:
+        return {
+            "status": "preview",
+            "uuid": new_uuid,
+            "name": name,
+            "template_uuid": "",
+            "action": "create",
+            "source": "native_writer",
+        }
+
+    try:
+        relative_primary, artifacts = build_native_object_artifacts(
+            object_type, new_uuid, name, fields
+        )
+    except ValueError as exc:
+        raise MutationError(
+            "invalid_fields",
+            object_type=object_type.value,
+            message=str(exc),
+        ) from exc
+
+    dest = export_dir / relative_primary
+    if dest.exists():
+        raise MutationError("already_exists", object_uuid=new_uuid)
+    writes = {export_dir / path: content for path, content in artifacts.items()}
+    try:
+        writes.update(
+            build_object_metadata_updates(
+                export_dir, object_type, new_uuid, name, add=True
+            )
+        )
+    except ExportMetadataError as exc:
+        raise MutationError("metadata_invalid", message=str(exc)) from exc
+    changed = _apply_mutation(export_dir, writes, [], f"Create {name}")
+    _commit_paths(export_dir, changed, f"Create {name}")
+    cache.get_codebase(export_dir, rebuild=True)
+    return {
+        "status": "created",
+        "uuid": new_uuid,
+        "name": name,
+        "file_path": str(dest),
+        "template_uuid": "",
+        "source": "native_writer",
+    }
 
 
 def _template_object(export_dir: Path, object_type: ObjectType, template_uuid: str) -> Any:

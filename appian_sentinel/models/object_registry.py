@@ -95,7 +95,7 @@ def _cap(
         export_dir=export_dir,
         content_tag=content_tag,
         native_write=native_write,
-        requires_template=requires_template or native_write,
+        requires_template=requires_template,
         sensitive=sensitive,
         mcp_slug=mcp_slug or object_type.value,
     )
@@ -252,13 +252,7 @@ OBJECT_CAPABILITIES: tuple[ObjectCapability, ...] = (
         native_write=True,
         requires_template=False,
     ),
-    _cap(
-        ObjectType.EVENT_CONSUMER,
-        "Event Consumer",
-        "eventConsumer",
-        native_write=True,
-        requires_template=False,
-    ),
+    _cap(ObjectType.EVENT_CONSUMER, "Event Consumer", "eventConsumer"),
     _cap(
         ObjectType.GROUP,
         "Group",

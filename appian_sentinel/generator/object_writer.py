@@ -51,7 +51,6 @@ _NATIVE_CONTENT_TYPES = frozenset(
         ObjectType.DECISION,
         ObjectType.OUTBOUND_INTEGRATION,
         ObjectType.WEB_API,
-        ObjectType.EVENT_CONSUMER,
         ObjectType.CONNECTED_SYSTEM,
     }
 )

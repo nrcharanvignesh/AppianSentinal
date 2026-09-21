@@ -62,7 +62,6 @@ NATIVE_WRITER_SLUGS = {
     "connected_system",
     "integration",
     "web_api",
-    "event_consumer",
     "group",
     "document",
     "document_folder",
@@ -89,7 +88,7 @@ def test_registry_slugs_directories_and_capabilities_match_appian_exports() -> N
     )
     assert {
         item.mcp_slug for item in OBJECT_CAPABILITIES if item.requires_template
-    } == set(EXPECTED_SLUG_TO_DIRECTORY)
+    } == set(EXPECTED_SLUG_TO_DIRECTORY) - NATIVE_WRITER_SLUGS
     assert {
         item.mcp_slug for item in OBJECT_CAPABILITIES if item.sensitive
     } == {"connected_system", "data_store", "group"}
@@ -98,6 +97,6 @@ def test_registry_slugs_directories_and_capabilities_match_appian_exports() -> N
             item.native_write and item.requires_template
             for item in OBJECT_CAPABILITIES
         )
-        == 23
+        == 0
     )
-    assert sum(not item.native_write for item in OBJECT_CAPABILITIES) == 11
+    assert sum(not item.native_write for item in OBJECT_CAPABILITIES) == 12
